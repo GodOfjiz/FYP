@@ -11,10 +11,10 @@ model = YOLO('Jetson_yolov11n-kitti/train2/weights/best.pt')
 model.export(
     format='engine',
     half=True,
-    imgsz=640,  # Or 416 if memory constrained
+    imgsz=640,  
     simplify=True,
-    device=0,   # Use Jetson GPU for export
-    workspace=2  # 2GB workspace
+    device=0,   
+    workspace=2 
 )
 
 print("TensorRT engine created on Jetson!")
