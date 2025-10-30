@@ -22,11 +22,4 @@ results = model.train(
 print("Training completed.")
 # Validation
 valid_results = model.val()
-
-# Export model to TensorRT engine
-model.export(format="engine", 
-             half=True,
-             name="FYP_jetson_yolo11n_engine"
-             )
-
-print("Model exported to TensorRT engine.")
+print("Validation completed.")
