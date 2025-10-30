@@ -10,18 +10,23 @@ model = YOLO("yolo11n.yaml").load("yolo11n.pt")  # build from YAML and transfer 
 # Train the model
 results = model.train(
     data="dataset.yaml",
-    epochs=10,
+    epochs=32,
+    batch=16,
+    workers=4,
+    amp=True,
     patience=3,
     mixup=0.1,
-    project='yolov11n-kitti',
+    project='Jetson_yolov11n-kitti',
     device=0
-    )
-
+)
+print("Training completed.")
 # Validation
 valid_results = model.val()
 
 # Export model to TensorRT engine
 model.export(format="engine", 
-             device="dla:0",
-             name="FYP_yolo11n_engine"
+             half=True,
+             name="FYP_jetson_yolo11n_engine"
              )
+
+print("Model exported to TensorRT engine.")
