@@ -2,24 +2,23 @@ import ultralytics
 import torch
 from ultralytics import YOLO
 
-#Load a model
-model = YOLO("yolo11n.yaml")  # build a new model from YAML
-model = YOLO("yolo11n.pt")  # load a pretrained model 
+# Load model 
 model = YOLO("yolo11n.yaml").load("yolo11n.pt")  # build from YAML and transfer weights
 
-# Train the model
-results = model.train(
-    data="dataset.yaml",
-    epochs=32,
-    batch=16,
-    workers=4,
-    amp=True,
-    patience=3,
-    mixup=0.1,
-    project='Jetson_yolov11n-kitti',
-    device=0
-)
-print("Training completed.")
-# Validation
-valid_results = model.val()
-print("Validation completed.")
+if __name__ == '__main__':
+    # Train the model 
+    results = model.train(
+        data="dataset.yaml",
+        epochs=100,
+        batch=8,
+        workers=8,
+        amp=True,
+        mixup=0.1,
+        project='Jetson_yolov11n-kitti-Cam-only-3',
+        device=0,
+    )
+    print("Training completed.")
+    
+    # Validation
+    valid_results = model.val()
+    print("Validation completed.")

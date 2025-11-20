@@ -7,8 +7,8 @@ from sklearn.model_selection import train_test_split
 
 # Define the image and label paths
 yolo_base_path = './data'
-images_path = './Dataset/data_object_image_2/training/image_2'
-labels_path = './Dataset/data_object_label_2/training/label_2'
+images_path = './Dataset/training/image_2'
+labels_path = './Dataset/training/label_2'
 yolo_images_path = os.path.join(yolo_base_path, 'images')
 yolo_labels_path = os.path.join(yolo_base_path, 'labels')
 
