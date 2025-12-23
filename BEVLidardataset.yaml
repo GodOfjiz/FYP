@@ -1,0 +1,15 @@
+path: ./Lidar Data
+test: test/images
+train: train/images
+val: val/images
+
+nc: 7
+
+names:
+- Car
+- Van
+- Truck
+- Pedestrian
+- Person_sitting
+- Cyclist
+- Tram
