@@ -114,10 +114,13 @@ def velodyne_to_bev_coords(points_velo, y_range=(-40.0, 40.0), x_range=(0.0, 70.
     
     return x_img, y_img, W, H
 
-def get_bev_bbox(corners_velo, y_range=(-40.0, 40.0), x_range=(0.0, 70.0), resolution=0.1):
+def get_bev_bbox(corners_velo, y_range=(-40.0, 40.0), x_range=(0.0, 70.0), resolution=0.1, padding_factor=1.15):
     """
     Get axis-aligned bounding box in BEV image coordinates
     Returns normalized YOLO format: x_center, y_center, width, height (all 0-1)
+    
+    Args:
+        padding_factor: Multiplier to expand bounding box (default 1.15 = 15% larger)
     """
     # Get BEV coordinates for bottom 4 corners
     bottom_corners = corners_velo[:4]
@@ -134,6 +137,10 @@ def get_bev_bbox(corners_velo, y_range=(-40.0, 40.0), x_range=(0.0, 70.0), resol
     y_center = (y_min + y_max) / 2.0
     width = x_max - x_min
     height = y_max - y_min
+    
+    # Apply padding to width and height (expand around center)
+    width *= padding_factor
+    height *= padding_factor
     
     # Normalize to 0-1
     x_center_norm = x_center / img_width
@@ -185,8 +192,12 @@ def generate_yolo_labels():
     img_width = int(np.ceil((y_range[1] - y_range[0]) / resolution))  # 800
     img_height = int(np.ceil((x_range[1] - x_range[0]) / resolution))  # 700
     
+    # Bounding box padding factor (15% larger to cover turning vehicles)
+    padding_factor = 1.15
+    
     print(f"Found {len(bev_files)} BEV images")
     print(f"BEV image size: {img_width}x{img_height}")
+    print(f"Bounding box padding: {(padding_factor - 1) * 100:.0f}% expansion")
     print(f"\nClass mapping:")
     for i, class_name in enumerate(output_classes):
         print(f"  {i}: {class_name}")
@@ -247,9 +258,9 @@ def generate_yolo_labels():
                 # Convert to velodyne coordinates
                 corners_velo = camera_to_velodyne(corners_cam, R0_rect_inv, Tr_cam_to_velo)
                 
-                # Get YOLO format bounding box
+                # Get YOLO format bounding box with padding
                 x_center, y_center, width, height = get_bev_bbox(
-                    corners_velo, y_range, x_range, resolution
+                    corners_velo, y_range, x_range, resolution, padding_factor
                 )
                 
                 # Check if box is valid (within image bounds and has valid size)
