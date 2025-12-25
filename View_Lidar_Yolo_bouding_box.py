@@ -2,7 +2,6 @@ import cv2
 import os
 import numpy as np
 
-# Set environment variables
 os.environ['QT_QPA_PLATFORM'] = 'xcb'
 os.environ['DISPLAY'] = ':0'
 
@@ -27,7 +26,6 @@ def read_yolo_label(label_path, img_width, img_height):
             width = float(data[3]) * img_width
             height = float(data[4]) * img_height
             
-            # Convert to corner coordinates
             x1 = int(center_x - width / 2)
             y1 = int(center_y - height / 2)
             x2 = int(center_x + width / 2)
@@ -38,41 +36,32 @@ def read_yolo_label(label_path, img_width, img_height):
     return boxes
 
 def visualize_bboxes(image_path, label_path, class_names=None):
-    """
-    Visualize bounding boxes on image
-    """
-    # Read image
+    """Visualize bounding boxes on image"""
     img = cv2.imread(image_path)
     if img is None:
         print(f"Error: Cannot read image {image_path}")
-        return
+        return None
     
     img_height, img_width = img.shape[:2]
-    
-    # Read labels
     boxes = read_yolo_label(label_path, img_width, img_height)
     
-    # Define colors for different classes
     colors = [
-        (255, 0, 0),      # Car - Red
+        (0, 0, 255),      # Car - Red (BGR)
         (0, 255, 0),      # Van - Green
-        (0, 0, 255),      # Truck - Blue
-        (255, 255, 0),    # Pedestrian - Cyan
+        (255, 0, 0),      # Truck - Blue
+        (0, 255, 255),    # Pedestrian - Yellow
         (255, 0, 255),    # Person_sitting - Magenta
-        (0, 255, 255),    # Cyclist - Yellow
+        (255, 255, 0),    # Cyclist - Cyan
         (128, 0, 128),    # Tram - Purple
         (128, 128, 128)   # Misc - Gray
     ]
     
-    # Draw bounding boxes
     for box in boxes:
         class_id, x1, y1, x2, y2 = box
         color = colors[class_id % len(colors)]
         
-        # Draw rectangle
         cv2.rectangle(img, (x1, y1), (x2, y2), color, 2)
         
-        # Draw label
         if class_names is not None and class_id < len(class_names):
             label = class_names[class_id]
         else:
@@ -85,13 +74,12 @@ def visualize_bboxes(image_path, label_path, class_names=None):
     return img
 
 def main():
-    image_dir = "./Dataset/training/lidar_bev/"
-    label_dir = "./Dataset/training/lidar_bev_labels/"
+    # Updated paths for new BEV images
+    image_dir = "./Dataset/training/lidar_bev_improved/"
+    label_dir = "./Dataset/training/lidar_bev_improved_labels/"
     
-    # KITTI dataset class names
-    class_names = ['Car', 'Van', 'Truck', 'Pedestrian', 'Person_sitting', 'Cyclist', 'Tram', 'Misc']
+    class_names = ['Car', 'Van', 'Truck', 'Pedestrian', 'Cyclist', 'Tram']
     
-    # Get all images
     image_files = sorted([f for f in os.listdir(image_dir) if f.endswith(('.png', '.jpg', '.jpeg'))])
     
     if not image_files:
@@ -99,36 +87,32 @@ def main():
         return
     
     print(f"Found {len(image_files)} images")
+    print("Controls: 'n'/Right = Next, 'p'/Left = Previous, 'q' = Quit")
     
-    # Process images
     current_idx = 0
     
     while current_idx < len(image_files):
         image_file = image_files[current_idx]
         image_path = os.path.join(image_dir, image_file)
         
-        # Get corresponding label file
         label_file = os.path.splitext(image_file)[0] + '.txt'
         label_path = os.path.join(label_dir, label_file)
         
-        # Visualize
         img = visualize_bboxes(image_path, label_path, class_names)
         
         if img is not None:
-            # Display image
-            cv2.imshow('KITTI YOLO Bounding Boxes', img)
+            cv2.imshow('New BEV YOLO Bounding Boxes', img)
             print(f"Showing: {image_file} ({current_idx + 1}/{len(image_files)})")
             
-            # Wait for key press
             key = cv2.waitKey(0) & 0xFF
             
-            if key == ord('q'):  # Quit
+            if key == ord('q'):
                 break
-            elif key == ord('n') or key == 83:  # Next (or right arrow)
+            elif key == ord('n') or key == 83:
                 current_idx = min(current_idx + 1, len(image_files) - 1)
-            elif key == ord('p') or key == 81:  # Previous (or left arrow)
+            elif key == ord('p') or key == 81:
                 current_idx = max(current_idx - 1, 0)
-            else:  # Any other key - next image
+            else:
                 current_idx += 1
     
     cv2.destroyAllWindows()
