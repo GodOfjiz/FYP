@@ -3,3 +3,5 @@ FYP/
 Dataset/
 data/
 Lidar Data/
+runs/
+Train_Script.sh
