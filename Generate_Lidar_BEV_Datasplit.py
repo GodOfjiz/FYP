@@ -6,8 +6,8 @@ import random
 
 def organize_yolo_dataset():
     # Paths
-    images_path = "./Dataset/training/lidar_bev/"
-    labels_path = "./Dataset/training/lidar_bev_labels/"
+    images_path = "./Dataset/training/lidar_bev_improved/"
+    labels_path = "./Dataset/training/lidar_bev_improved_labels/"
     output_path = "./Lidar Data/" 
     
     # Create output directory if it doesn't exist
