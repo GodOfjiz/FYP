@@ -33,17 +33,20 @@ def load_calib(calib_file):
 def save_lidar_bev_image(
     output_path,
     points,
-    x_range=(0.0, 70.0),     # forward (m)
-    y_range=(-40.0, 40.0),   # left-right (m)
+    x_range=(0.0, 100.0),    # forward (m) - extended for better aspect ratio
+    y_range=(-82.5, 82.5),   # left-right (m) - ±82.5m = 165m total
     z_range=(-2.5, 1.5),     # height clip (m)
-    resolution=0.1,
+    resolution=0.1,          
     min_x=2.0,               # remove ego-close points
 ):
     """
-    BEV feature map for detection:
+    BEV feature map for detection with camera-matching aspect ratio:
       R = density (log scaled)
       G = max height (clipped+normalized)
       B = max intensity (robust normalized)
+      
+    Output: ~825×500 → padded to 832×512 for 32-divisibility
+    Aspect ratio: ~1.625:1 (closer to camera's 3.31:1)
     """
 
     x = points[:, 0]
@@ -60,8 +63,8 @@ def save_lidar_bev_image(
     )
     x, y, z, i = x[mask], y[mask], z[mask], i[mask]
 
-    H = int(np.ceil((x_range[1] - x_range[0]) / resolution))
-    W = int(np.ceil((y_range[1] - y_range[0]) / resolution))
+    H = int(np.ceil((x_range[1] - x_range[0]) / resolution))  # 500 pixels
+    W = int(np.ceil((y_range[1] - y_range[0]) / resolution))  # 825 pixels
 
     # Grid indices: row ~ x (forward), col ~ y (left-right)
     ix = ((x - x_range[0]) / resolution).astype(np.int32)
@@ -88,8 +91,8 @@ def save_lidar_bev_image(
     intensity_norm = np.clip(intensity_map / (p99 + 1e-6), 0.0, 1.0)
 
     # Normalize density (log scale)
-    # N=64 is a typical cap; tune based on your sensor/resolution
-    density_norm = np.clip(np.log1p(density_map) / np.log(1.0 + 64.0), 0.0, 1.0)
+    # Adjusted for 0.2m resolution (fewer points per pixel than 0.1m)
+    density_norm = np.clip(np.log1p(density_map) / np.log(1.0 + 32.0), 0.0, 1.0)
 
     bev = np.stack([
         density_norm,   # R
@@ -99,8 +102,20 @@ def save_lidar_bev_image(
 
     bev_u8 = (bev * 255.0).astype(np.uint8)
 
-    # Optional: make "forward" point upward in the saved image (common for viewing)
+    # Flip vertically (forward points upward) AND horizontally (mirror left-right)
     bev_u8 = np.flipud(bev_u8)
+    bev_u8 = np.fliplr(bev_u8)  # NEW: Horizontal flip
+
+    # Pad to make dimensions divisible by 32 (832×512)
+    target_h = ((H + 31) // 32) * 32  # 512
+    target_w = ((W + 31) // 32) * 32  # 832
+    
+    if H < target_h or W < target_w:
+        padded = np.zeros((target_h, target_w, 3), dtype=np.uint8)
+        pad_h = (target_h - H) // 2
+        pad_w = (target_w - W) // 2
+        padded[pad_h:pad_h+H, pad_w:pad_w+W] = bev_u8
+        bev_u8 = padded
 
     Image.fromarray(bev_u8).save(output_path)
 
@@ -121,9 +136,19 @@ def process_all_files():
         return
     
     print(f"Found {len(bin_files)} LiDAR files")
-    print("  Blue = Ground level")
-    print("  Green/Yellow = Medium height (cars)")
-    print("  Red = High objects")
+    print("\n" + "="*60)
+    print("BEV Generation Settings:")
+    print("  Resolution: 0.2m per pixel")
+    print("  Forward range: 0-100m")
+    print("  Left-right range: ±82.5m (165m total)")
+    print("  Output size: 832×512 pixels (padded)")
+    print("  Aspect ratio: 1.625:1 (matches camera better)")
+    print("  Horizontal flip: Enabled (mirrors left-right)")
+    print("="*60)
+    print("\nColor encoding:")
+    print("  Red = Point density (log scale)")
+    print("  Green = Height (ground=dark, elevated=bright)")
+    print("  Blue = Intensity")
     print("\nProcessing files...")
     
     for idx, bin_file in enumerate(bin_files):
@@ -132,9 +157,7 @@ def process_all_files():
         
         try:
             points = load_lidar_data(bin_file)
-
             save_lidar_bev_image(output_bev_file, points)
-            
             
             print(f"  [{idx+1}/{len(bin_files)}] Saved: {file_id}.png ({points.shape[0]} points)")
             

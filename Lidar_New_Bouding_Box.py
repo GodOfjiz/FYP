@@ -2,6 +2,12 @@ import numpy as np
 import glob
 import os
 
+def load_velodyne_points(bin_file):
+    """Load LiDAR point cloud from KITTI .bin file"""
+    with open(bin_file, 'rb') as f:
+        points = np.fromfile(f, dtype=np.float32).reshape(-1, 4)
+    return points  # [N, 4] where columns are [x, y, z, intensity]
+
 def load_calib(calib_file):
     """Load calibration matrices from KITTI calibration file"""
     calib = {}
@@ -92,29 +98,81 @@ def camera_to_velodyne(corners_cam, R0_rect_inv, Tr_cam_to_velo):
     
     return corners_velo[:, :3]
 
-def velodyne_to_bev_coords(points_velo, y_range=(-40.0, 40.0), x_range=(0.0, 70.0), resolution=0.1):
+def check_points_in_box_3d(points_velo, corners_velo, min_points=3):
+    """
+    Check if bounding box contains at least min_points LiDAR points
+    
+    Args:
+        points_velo: [N, 3] LiDAR points in velodyne coordinates
+        corners_velo: [8, 3] 3D box corners in velodyne coordinates
+        min_points: Minimum number of points required (default: 3)
+    
+    Returns:
+        tuple: (has_points: bool, num_points: int)
+    """
+    # Get bottom 4 corners (they define the horizontal extent)
+    bottom_corners = corners_velo[:4]
+    
+    # Get x and y ranges from bottom corners
+    x_min = np.min(bottom_corners[:, 0])
+    x_max = np.max(bottom_corners[:, 0])
+    y_min = np.min(bottom_corners[:, 1])
+    y_max = np.max(bottom_corners[:, 1])
+    
+    # Get z range from all 8 corners (full height)
+    z_min = np.min(corners_velo[:, 2])
+    z_max = np.max(corners_velo[:, 2])
+    
+    # Count points inside the 3D bounding box (axis-aligned approximation)
+    mask = (
+        (points_velo[:, 0] >= x_min) & (points_velo[:, 0] <= x_max) &
+        (points_velo[:, 1] >= y_min) & (points_velo[:, 1] <= y_max) &
+        (points_velo[:, 2] >= z_min) & (points_velo[:, 2] <= z_max)
+    )
+    
+    num_points = np.sum(mask)
+    return num_points >= min_points, num_points
+
+def velodyne_to_bev_coords(points_velo, y_range=(-82.5, 82.5), x_range=(0.0, 100.0), resolution=0.1, image_size=(1664, 1024)):
     """
     Convert velodyne coordinates to BEV pixel coordinates
-    Accounts for vertical flip applied in BEV generation
+    Accounts for both vertical AND horizontal flips, plus padding
+    
+    Args:
+        y_range: left-right range in meters
+        x_range: forward range in meters  
+        resolution: meters per pixel (0.1m = 10cm per pixel)
+        image_size: (width, height) of final padded image
     """
     x = points_velo[:, 0]  # Forward
     y = points_velo[:, 1]  # Left-right
     
-    H = int(np.ceil((x_range[1] - x_range[0]) / resolution))  # 700
-    W = int(np.ceil((y_range[1] - y_range[0]) / resolution))  # 800
+    # Original grid size before padding
+    H_orig = int(np.ceil((x_range[1] - x_range[0]) / resolution))  # 1000
+    W_orig = int(np.ceil((y_range[1] - y_range[0]) / resolution))  # 1650
     
-    # Convert to grid indices (before flip)
+    # Padding offsets
+    img_w, img_h = image_size
+    pad_h = (img_h - H_orig) // 2  
+    pad_w = (img_w - W_orig) // 2
+    
+    # Convert to grid indices (before any flips)
     ix = ((x - x_range[0]) / resolution).astype(int)
     iy = ((y - y_range[0]) / resolution).astype(int)
     
-    # Account for vertical flip (np.flipud in BEV generation)
-    # After flip: row 0 becomes row (H-1), etc.
-    y_img = (H - 1) - ix  # Flipped row index
-    x_img = iy            # Column index unchanged
+    # Apply vertical flip (flipud): row 0 becomes row (H_orig-1)
+    ix_flipped = (H_orig - 1) - ix
     
-    return x_img, y_img, W, H
+    # Apply horizontal flip (fliplr): col 0 becomes col (W_orig-1)
+    iy_flipped = (W_orig - 1) - iy
+    
+    # Add padding offsets
+    y_img = ix_flipped + pad_h  # Final row in padded image
+    x_img = iy_flipped + pad_w  # Final column in padded image
+    
+    return x_img, y_img, img_w, img_h
 
-def get_bev_bbox(corners_velo, y_range=(-40.0, 40.0), x_range=(0.0, 70.0), resolution=0.1, padding_factor=1.15):
+def get_bev_bbox(corners_velo, y_range=(-82.5, 82.5), x_range=(0.0, 100.0), resolution=0.1, image_size=(1664, 1024), padding_factor=1.15):
     """
     Get axis-aligned bounding box in BEV image coordinates
     Returns normalized YOLO format: x_center, y_center, width, height (all 0-1)
@@ -124,7 +182,9 @@ def get_bev_bbox(corners_velo, y_range=(-40.0, 40.0), x_range=(0.0, 70.0), resol
     """
     # Get BEV coordinates for bottom 4 corners
     bottom_corners = corners_velo[:4]
-    x_img, y_img, img_width, img_height = velodyne_to_bev_coords(bottom_corners, y_range, x_range, resolution)
+    x_img, y_img, img_width, img_height = velodyne_to_bev_coords(
+        bottom_corners, y_range, x_range, resolution, image_size
+    )
     
     # Get min/max to form axis-aligned bounding box
     x_min = np.min(x_img)
@@ -142,7 +202,7 @@ def get_bev_bbox(corners_velo, y_range=(-40.0, 40.0), x_range=(0.0, 70.0), resol
     width *= padding_factor
     height *= padding_factor
     
-    # Normalize to 0-1
+    # Normalize to 0-1 (YOLO format)
     x_center_norm = x_center / img_width
     y_center_norm = y_center / img_height
     width_norm = width / img_width
@@ -161,6 +221,7 @@ def generate_yolo_labels():
     bev_path = "./Dataset/training/lidar_bev_improved/"
     label_path = "./Dataset/training/label_2/"
     calib_path = "./Dataset/training/calib/"
+    velodyne_path = "./Dataset/training/velodyne/"  # LiDAR point clouds
     output_path = "./Dataset/training/lidar_bev_improved_labels/"
     
     os.makedirs(output_path, exist_ok=True)
@@ -185,47 +246,80 @@ def generate_yolo_labels():
     # Classes to include in output
     output_classes = ['Car', 'Van', 'Truck', 'Pedestrian', 'Cyclist', 'Tram']
     
-    # BEV image parameters (matching new BEV generation settings)
-    y_range = (-40.0, 40.0)
-    x_range = (0.0, 70.0)
-    resolution = 0.1
-    img_width = int(np.ceil((y_range[1] - y_range[0]) / resolution))  # 800
-    img_height = int(np.ceil((x_range[1] - x_range[0]) / resolution))  # 700
+    # BEV parameters with 0.1m resolution (10cm per pixel)
+    y_range = (-82.5, 82.5)  # 165m total left-right
+    x_range = (0.0, 100.0)   # 100m forward
+    resolution = 0.1         # 0.1m per pixel (HIGH RESOLUTION)
+    
+    # Image size calculation:
+    # H = 100 / 0.1 = 1000 pixels
+    # W = 165 / 0.1 = 1650 pixels
+    # Adding padding: 1664 x 1024 (divisible by 32 for YOLO)
+    image_size = (1664, 1024)  # width × height (padded)
     
     # Bounding box padding factor (15% larger to cover turning vehicles)
     padding_factor = 1.15
     
+    # Minimum LiDAR points required inside bounding box
+    min_points_threshold = 3  # At least 3 points to keep the box
+    
+    print("="*70)
+    print("YOLO LABEL GENERATION - BEV LiDAR with Empty Box Filtering")
+    print("="*70)
     print(f"Found {len(bev_files)} BEV images")
-    print(f"BEV image size: {img_width}x{img_height}")
-    print(f"Bounding box padding: {(padding_factor - 1) * 100:.0f}% expansion")
-    print(f"\nClass mapping:")
+    print(f"\nBEV Configuration:")
+    print(f"  Image size: {image_size[0]}×{image_size[1]} (width×height)")
+    print(f"  Resolution: {resolution}m per pixel (10cm detail!)")
+    print(f"  Coverage: {x_range[1]}m forward, ±{y_range[1]}m left-right")
+    print(f"  Grid size (before padding): 1650×1000 pixels")
+    print(f"  Padding: {(image_size[0]-1650)//2}px horizontal, {(image_size[1]-1000)//2}px vertical")
+    print(f"\nFiltering Settings:")
+    print(f"  Bounding box padding: {(padding_factor - 1) * 100:.0f}% expansion")
+    print(f"  Minimum LiDAR points per box: {min_points_threshold}")
+    print(f"  Empty boxes will be: IGNORED ✗")
+    print(f"\nTransformations:")
+    print(f"  Horizontal flip: Enabled")
+    print(f"  Vertical flip: Enabled")
+    print(f"\nClass Mapping (YOLO Format):")
     for i, class_name in enumerate(output_classes):
         print(f"  {i}: {class_name}")
-    print(f"  Note: Person_sitting merged into Pedestrian")
-    print(f"\nIgnoring: DontCare, Misc, and other unlisted classes")
-    print("\n" + "="*60)
-    print("Processing files...")
+    print(f"\nNote: Person_sitting merged into Pedestrian (class 3)")
+    print(f"Ignoring: DontCare, Misc, and other unlisted classes")
+    print("="*70)
+    print("Processing files...\n")
     
     total_objects = 0
+    empty_boxes_filtered = 0
     class_counts = {class_name: 0 for class_name in output_classes}
     person_sitting_count = 0
     skipped_counts = {'DontCare': 0, 'Misc': 0, 'Other': 0}
+    files_with_empty_boxes = 0
     
     for idx, bev_file in enumerate(bev_files):
         file_id = os.path.splitext(os.path.basename(bev_file))[0]
         
         label_file = os.path.join(label_path, file_id + ".txt")
         calib_file = os.path.join(calib_path, file_id + ".txt")
+        velodyne_file = os.path.join(velodyne_path, file_id + ".bin")
         output_file = os.path.join(output_path, file_id + ".txt")
         
         try:
             # Check if calibration file exists
             if not os.path.exists(calib_file):
                 print(f"  [{idx+1}/{len(bev_files)}] Skipping {file_id}: Calibration file not found")
-                # Create empty label file
                 with open(output_file, 'w') as f:
                     pass
                 continue
+            
+            # Check if velodyne file exists
+            if not os.path.exists(velodyne_file):
+                print(f"  [{idx+1}/{len(bev_files)}] Skipping {file_id}: Velodyne file not found")
+                with open(output_file, 'w') as f:
+                    pass
+                continue
+            
+            # Load LiDAR point cloud
+            points_velo = load_velodyne_points(velodyne_file)
             
             # Load calibration
             R0_rect, Tr_velo_to_cam, R0_rect_inv, Tr_cam_to_velo = load_calib(calib_file)
@@ -236,6 +330,7 @@ def generate_yolo_labels():
             # Generate YOLO labels
             yolo_labels = []
             obj_count = 0
+            empty_count = 0
             
             for obj in objects:
                 # Skip DontCare and Misc objects
@@ -258,14 +353,25 @@ def generate_yolo_labels():
                 # Convert to velodyne coordinates
                 corners_velo = camera_to_velodyne(corners_cam, R0_rect_inv, Tr_cam_to_velo)
                 
+                # *** CHECK IF BOX CONTAINS LIDAR POINTS ***
+                has_points, num_points = check_points_in_box_3d(
+                    points_velo[:, :3], corners_velo, min_points_threshold
+                )
+                
+                if not has_points:
+                    empty_count += 1
+                    empty_boxes_filtered += 1
+                    continue  # IGNORE this bounding box
+                
                 # Get YOLO format bounding box with padding
                 x_center, y_center, width, height = get_bev_bbox(
-                    corners_velo, y_range, x_range, resolution, padding_factor
+                    corners_velo, y_range, x_range, resolution, image_size, padding_factor
                 )
                 
                 # Check if box is valid (within image bounds and has valid size)
                 if width > 0 and height > 0 and width <= 1 and height <= 1:
                     class_id = class_map[obj['type']]
+                    # YOLO format: class_id x_center y_center width height (normalized 0-1)
                     yolo_labels.append(f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}")
                     obj_count += 1
                     total_objects += 1
@@ -281,19 +387,28 @@ def generate_yolo_labels():
                 if yolo_labels:
                     f.write('\n')
             
-            print(f"  [{idx+1}/{len(bev_files)}] {file_id}: {obj_count} objects")
+            if empty_count > 0:
+                files_with_empty_boxes += 1
+                print(f"  [{idx+1}/{len(bev_files)}] {file_id}: {obj_count} objects kept, {empty_count} empty boxes filtered")
+            else:
+                print(f"  [{idx+1}/{len(bev_files)}] {file_id}: {obj_count} objects")
             
         except Exception as e:
-            print(f"  [{idx+1}/{len(bev_files)}] Error processing {file_id}: {str(e)}")
+            print(f"  [{idx+1}/{len(bev_files)}] ERROR processing {file_id}: {str(e)}")
             # Create empty label file on error
             with open(output_file, 'w') as f:
                 pass
     
-    print("\n" + "="*60)
-    print(f"Completed!")
+    print("\n" + "="*70)
+    print("COMPLETED!")
+    print("="*70)
     print(f"YOLO labels saved to: {output_path}")
-    print(f"\nTotal objects: {total_objects}")
-    print(f"\nObjects per class:")
+    print(f"\nStatistics:")
+    print(f"  Total valid objects: {total_objects}")
+    print(f"  Empty boxes filtered: {empty_boxes_filtered}")
+    print(f"  Files with empty boxes: {files_with_empty_boxes}")
+    print(f"  Filtering rate: {empty_boxes_filtered/(total_objects+empty_boxes_filtered)*100:.1f}%")
+    print(f"\nObjects per Class:")
     for class_name in output_classes:
         count = class_counts[class_name]
         if count > 0:
@@ -302,7 +417,7 @@ def generate_yolo_labels():
     if person_sitting_count > 0:
         print(f"\n  (includes {person_sitting_count} Person_sitting objects merged into Pedestrian)")
     
-    print(f"\nSkipped objects:")
+    print(f"\nSkipped Objects:")
     for skip_type, count in skipped_counts.items():
         if count > 0:
             print(f"  {skip_type}: {count}")
@@ -313,6 +428,9 @@ def generate_yolo_labels():
         for class_name in output_classes:
             f.write(f"{class_name}\n")
     print(f"\nClass names saved to: {classes_file}")
+    print(f"\nYOLO Format: <class_id> <x_center> <y_center> <width> <height>")
+    print(f"All coordinates normalized to 0-1 range")
+    print("="*70)
 
 def main():
     generate_yolo_labels()
