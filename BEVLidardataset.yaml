@@ -3,13 +3,11 @@ test: test/images
 train: train/images
 val: val/images
 
-nc: 7
-
+nc: 6
 names:
-- Car
-- Van
-- Truck
-- Pedestrian
-- Person_sitting
-- Cyclist
-- Tram
+  0: Car
+  1: Van
+  2: Truck
+  3: Pedestrian  
+  4: Cyclist
+  5: Tram
