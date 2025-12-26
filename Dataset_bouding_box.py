@@ -1,6 +1,8 @@
 import cv2
 import os
 import numpy as np
+os.environ['QT_QPA_PLATFORM'] = 'xcb'
+os.environ['DISPLAY'] = ':0'
 
 def plot_one_box(x, img, color=None, label=None, line_thickness=None):
     # Plots one bounding box on image img
@@ -57,11 +59,11 @@ def visualize_bbox(image_path, label_path, class_names):
 class_names = ['Car', 'Van', 'Truck', 'Pedestrian', 'Person_sitting', 'Cyclist', 'Tram', 'Misc']
 
 # Use KITTI dataset paths
-kitti_images = './Dataset/data_object_image_2/training/image_2'
-kitti_labels = './Dataset/data_object_label_2/training/label_2'
+kitti_images = './Dataset/training/image_2'
+kitti_labels = './Dataset/training/label_2'
 
 # Example usage with KITTI paths
-image_name = '000005.png'  # Replace with your image name
+image_name = '000527.png'  # Replace with your image name
 image_path = os.path.join(kitti_images, image_name)
 label_path = os.path.join(kitti_labels, image_name.replace('.png', '.txt'))
 
