@@ -8,26 +8,11 @@ model = YOLO("yolo11n.yaml").load("yolo11n.pt")  # build from YAML and transfer 
 
 # Custom augmentation using Albumentations
 custom_transforms = [
-    A.ZoomBlur(
-    max_factor=[1, 1.2],
-    step_factor=[0.01, 0.03],
-    p=0.3,
-    ),
     A.ISONoise(
     color_shift=[0.01, 0.05],
     intensity=[0, 0.5],
     p=0.5,
     ),
-    A.RandomRain(
-    slant_range=[-15, 15],
-    drop_length=50,
-    drop_width=1,
-    drop_color=[200, 200, 200],
-    blur_value=7,
-    brightness_coefficient=0.6,
-    rain_type="default",
-    p =0.4,
-    )
 ]
 
 
@@ -35,11 +20,11 @@ if __name__ == '__main__':
     # Train the model 
     results = model.train(
         data="dataset.yaml",
-        epochs=120,
-        batch=8,
+        epochs=135,
+        batch=20,
         workers=8,
         amp=True,
-        project='Jetson_yolov11n-kitti-Cam-only-4',
+        project='Jetson_yolov11n-kitti-Cam-only-5',
         device=0,
         augmentations=custom_transforms,
         
@@ -63,9 +48,11 @@ if __name__ == '__main__':
         augment=True,       # Enable augmentation
         save=True,          # Save checkpoints
         plots=True,         # Save training plots
+        patience=135,      # Early stopping patience
     )
     print("Training completed.")
     
     # Validation
-    valid_results = model.val()
+    best_model = YOLO('./Jetson_yolov11n-kitti-Cam-only-5/train/weights/best.pt')
+    valid_results = best_model.val()
     print("Validation completed.")
