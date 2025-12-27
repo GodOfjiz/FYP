@@ -8,4 +8,5 @@ Train_Script.sh
 Continue_training.py
 yolo11n.pt
 yolo11s.pt
+Camera_train_2.py
 
