@@ -4,14 +4,20 @@ from ultralytics import YOLO
 
 model = YOLO("yolo11n.yaml").load("yolo11n.pt")
 
+Version = 'Jetson_yolov11n-kitti-LIDARBEV-only-3'
+
+custom_transforms = []
+
 if __name__ == '__main__':
     results = model.train(
         data="BEVLidardataset.yaml",
         epochs=100,
-        batch=20,   
+        batch=8,   
         workers=8,          
         amp=True,           
-        device=0,           
+        device=0,
+        imgsz=1024,
+        augmentations=custom_transforms,        
         
         # ===== AUGMENTATION =====
         hsv_h=0.0,          # No hue changes
@@ -21,7 +27,7 @@ if __name__ == '__main__':
         fliplr=0.5,         # Left/right symmetry
         flipud=0.0,         # No up/down symmetry
         # ===== TRAINING =====
-        project='Jetson_yolov11n-kitti-LIDARBEV-only-2',
+        project=Version,
         augment=False,
         save=True,
         plots=True,
@@ -29,7 +35,3 @@ if __name__ == '__main__':
     )
     
     print("Training completed.")
-    
-    best_model = YOLO('./Jetson_yolov11n-kitti-LIDARBEV-only-2/train/weights/best.pt')
-    valid_results = best_model.val()
-    print("Validation completed.")

@@ -4,7 +4,7 @@ from ultralytics import YOLO
 import albumentations as A
 
 # Load model 
-model = YOLO("yolo11n.yaml").load("yolo11n.pt")  # build from YAML and transfer weights
+model = YOLO("yolo11s.yaml").load("yolo11s.pt")  # build from YAML and transfer weights
 
 # Custom augmentation using Albumentations
 custom_transforms = [
@@ -15,16 +15,17 @@ custom_transforms = [
     ),
 ]
 
+Version = 'Jetson_yolov11s-kitti-Cam-only-6'
 
 if __name__ == '__main__':
     # Train the model 
     results = model.train(
         data="dataset.yaml",
-        epochs=135,
-        batch=20,
-        workers=8,
+        epochs=125,
+        batch=8,
+        workers=16,
         amp=True,
-        project='Jetson_yolov11n-kitti-Cam-only-5',
+        project=Version,
         device=0,
         augmentations=custom_transforms,
         
@@ -48,11 +49,7 @@ if __name__ == '__main__':
         augment=True,       # Enable augmentation
         save=True,          # Save checkpoints
         plots=True,         # Save training plots
-        patience=135,      # Early stopping patience
+        patience=125,      # Early stopping patience
     )
     print("Training completed.")
     
-    # Validation
-    best_model = YOLO('./Jetson_yolov11n-kitti-Cam-only-5/train/weights/best.pt')
-    valid_results = best_model.val()
-    print("Validation completed.")
