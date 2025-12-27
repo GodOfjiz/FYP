@@ -9,4 +9,7 @@ Continue_training.py
 yolo11n.pt
 yolo11s.pt
 Camera_train_2.py
+cuda-keyring_1.1-1_all.deb
+yolo11n.engine
+yolo11n.onnx
 
