@@ -26,7 +26,7 @@ kitti_to_yolo_mapping = {
     'Van': 1,
     'Truck': 2,
     'Pedestrian': 3,
-    'Person_sitting': 3,  # ✅ Merged into Pedestrian
+    'Person_sitting': 3,  
     'Cyclist': 4,
     'Tram': 5
 }
@@ -196,7 +196,7 @@ if os.path.exists('./data/labels'):
     shutil.rmtree('./data/labels')
 
 print("\n" + "="*60)
-print("✅ CONVERSION AND SPLITTING COMPLETE!")
+print("CONVERSION AND SPLITTING COMPLETE!")
 print("="*60)
 print(f"Dataset saved to: {yolo_base_path}/")
 print(f"  - train/images/ and train/labels/")
@@ -207,7 +207,7 @@ print(f"names:")
 print(f"  0: Car")
 print(f"  1: Van")
 print(f"  2: Truck")
-print(f"  3: Pedestrian  # (includes Person_sitting)")
+print(f"  3: Pedestrian including Person_sitting)")
 print(f"  4: Cyclist")
 print(f"  5: Tram")
 print("="*60)
