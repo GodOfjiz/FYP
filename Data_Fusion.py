@@ -34,7 +34,7 @@ def load_calibration(calib_file):
     return P2, R0_rect, Tr_velo_to_cam
 
 # ============================================================================
-# BEV Generation
+# BEV Generation (Grayscale - 1 Channel)
 # ============================================================================
 
 def lidar_to_bev_array(
@@ -45,11 +45,16 @@ def lidar_to_bev_array(
     resolution=0.1,
     min_x=0.0,
 ):
-    """Convert LiDAR points to BEV image array"""
+    """
+    Convert LiDAR points to 1-channel grayscale BEV image array (height only)
+    
+    Returns:
+        bev_u8: Grayscale BEV image (H, W) - single channel
+        height_map: Raw height map (H, W) for extracting actual height values
+    """
     x = points[:, 0]
     y = points[:, 1]
     z = points[:, 2]
-    i = points[:, 3] if points.shape[1] > 3 else np.zeros_like(z)
 
     # Filter ROI
     mask = (
@@ -58,7 +63,7 @@ def lidar_to_bev_array(
         (z >= z_range[0]) & (z <= z_range[1]) &
         (x >= min_x)
     )
-    x, y, z, i = x[mask], y[mask], z[mask], i[mask]
+    x, y, z = x[mask], y[mask], z[mask]
 
     H = int(np.ceil((x_range[1] - x_range[0]) / resolution))  # 700 pixels
     W = int(np.ceil((y_range[1] - y_range[0]) / resolution))  # 800 pixels
@@ -67,38 +72,23 @@ def lidar_to_bev_array(
     iy = ((y - y_range[0]) / resolution).astype(np.int32)
 
     valid = (ix >= 0) & (ix < H) & (iy >= 0) & (iy < W)
-    ix, iy, z, i = ix[valid], iy[valid], z[valid], i[valid]
+    ix, iy, z = ix[valid], iy[valid], z[valid]
 
-    # Aggregate maps
+    # Aggregate height map only
     height_map = np.full((H, W), -np.inf, dtype=np.float32)
-    intensity_map = np.zeros((H, W), dtype=np.float32)
-    density_map = np.zeros((H, W), dtype=np.float32)
-
     np.maximum.at(height_map, (ix, iy), z)
-    np.maximum.at(intensity_map, (ix, iy), i)
-    np.add.at(density_map, (ix, iy), 1.0)
 
     # Normalize height
     height_map[~np.isfinite(height_map)] = z_range[0]
     height_norm = (np.clip(height_map, *z_range) - z_range[0]) / (z_range[1] - z_range[0])
 
-    # Normalize intensity
-    p99 = np.percentile(intensity_map[intensity_map > 0], 99) if np.any(intensity_map > 0) else 1.0
-    intensity_norm = np.clip(intensity_map / (p99 + 1e-6), 0.0, 1.0)
-
-    # Normalize density
-    density_norm = np.clip(np.log1p(density_map) / np.log(1.0 + 32.0), 0.0, 1.0)
-
-    bev = np.stack([
-        density_norm,
-        height_norm,
-        intensity_norm
-    ], axis=-1)
-
-    bev_u8 = (bev * 255.0).astype(np.uint8)
+    # Convert to uint8 (single channel)
+    bev_u8 = (height_norm * 255.0).astype(np.uint8)
+    
+    # Flip vertically (forward points upward)
     bev_u8 = np.flipud(bev_u8)
 
-    return bev_u8, height_map  # Return both display image and raw height map
+    return bev_u8, height_map  # Return both display image (H, W) and raw height map
 
 # ============================================================================
 # LiDAR Height Extraction
@@ -109,7 +99,7 @@ def get_Lidar_Height_BEV_image(bev_image, bbox, z_range=(-2.5, 1.5)):
     Extract maximum height and ground level from BEV bounding box
     
     Args:
-        bev_image: BEV image (H, W, 3) - RGB format
+        bev_image: Grayscale BEV image (H, W) - single channel
         bbox: YOLO bbox [x_center, y_center, width, height] in normalized coords
         z_range: Height range in meters
     
@@ -118,8 +108,8 @@ def get_Lidar_Height_BEV_image(bev_image, bbox, z_range=(-2.5, 1.5)):
         ground_height_m: Estimated ground height in meters
         object_height_m: Object height above ground
     """
-    green_channel = bev_image[:, :, 1]
-    img_h, img_w = green_channel.shape
+    # bev_image is already 2D (H, W)
+    img_h, img_w = bev_image.shape
     
     # Convert bbox to pixels
     x_center, y_center, width, height = bbox
@@ -133,10 +123,10 @@ def get_Lidar_Height_BEV_image(bev_image, bbox, z_range=(-2.5, 1.5)):
     y1, y2 = max(0, y1), min(img_h, y2)
     
     # Extract bbox region
-    bbox_region = green_channel[y1:y2, x1:x2]
+    bbox_region = bev_image[y1:y2, x1:x2]
     
     # Get max height in bbox
-    max_green = np.max(bbox_region) if bbox_region.size > 0 else 0
+    max_gray = np.max(bbox_region) if bbox_region.size > 0 else 0
     
     # Estimate ground using percentile from expanded region
     margin = 20
@@ -145,17 +135,17 @@ def get_Lidar_Height_BEV_image(bev_image, bbox, z_range=(-2.5, 1.5)):
     x1_exp = max(0, x1 - margin)
     x2_exp = min(img_w, x2 + margin)
     
-    expanded_region = green_channel[y1_exp:y2_exp, x1_exp:x2_exp]
+    expanded_region = bev_image[y1_exp:y2_exp, x1_exp:x2_exp]
     valid_pixels = expanded_region[expanded_region > 0]
     
     if len(valid_pixels) > 0:
-        ground_green = np.percentile(valid_pixels, 5)  # 5th percentile as ground
+        ground_gray = np.percentile(valid_pixels, 5)  # 5th percentile as ground
     else:
-        ground_green = 0
+        ground_gray = 0
     
     # Convert to meters
-    max_height_m = (max_green / 255.0) * (z_range[1] - z_range[0]) + z_range[0]
-    ground_height_m = (ground_green / 255.0) * (z_range[1] - z_range[0]) + z_range[0]
+    max_height_m = (max_gray / 255.0) * (z_range[1] - z_range[0]) + z_range[0]
+    ground_height_m = (ground_gray / 255.0) * (z_range[1] - z_range[0]) + z_range[0]
     object_height_m = max_height_m - ground_height_m
     
     return max_height_m, ground_height_m, object_height_m
@@ -178,7 +168,11 @@ def get_Lidar_Corners_BEV_image(bbox, bev_shape, x_range=(0, 70), y_range=(-40, 
         corners_3d: Array of shape (4, 2) with [x, y] in LiDAR coords (meters)
                     Order: [front-left, front-right, rear-right, rear-left]
     """
-    img_h, img_w = bev_shape[:2]
+    # Handle both 2D and 3D shapes
+    if len(bev_shape) == 3:
+        img_h, img_w = bev_shape[:2]
+    else:
+        img_h, img_w = bev_shape
     
     # Convert normalized bbox to pixels
     x_center, y_center, width, height = bbox
@@ -428,7 +422,7 @@ def main():
     # Load models
     print("Loading models...")
     camera_model = YOLO("./Jetson_yolov11n-kitti-Cam-only-4/train/weights/best.pt")
-    lidar_model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-3/train/weights/best.pt")
+    lidar_model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-4/train/weights/best.pt")
     
     # Define paths
     camera_path = "./Dataset/testing/image_2"
@@ -454,7 +448,6 @@ def main():
     class_names = camera_model.names
     
     print(f"\nProcessing {len(camera_files)} samples...")
-    print("="*60)
     
     # Process each sample
     for idx, (cam_file, bin_file) in enumerate(zip(camera_files, bin_files)):
@@ -480,9 +473,13 @@ def main():
             cv2.imwrite(f"{output_path}/camera/{file_id}.png", cam_viz)
             
             # ================================================================
-            # 3. LiDAR inference
+            # 3. LiDAR inference (1-channel grayscale BEV)
             # ================================================================
             bev_image, height_map = lidar_to_bev_array(points)
+            
+            # Verify it's single channel
+            assert bev_image.ndim == 2, f"Expected 2D array, got shape {bev_image.shape}"
+            
             lidar_results = lidar_model.predict(source=bev_image, save=False, verbose=False)
             lidar_detections = lidar_results[0].boxes
             
@@ -559,7 +556,7 @@ def main():
     print("\n" + "="*60)
     print(f"Completed! Results saved to: {output_path}")
     print(f"  - Camera detections (2D): {output_path}/camera/")
-    print(f"  - LiDAR BEV detections: {output_path}/lidar/")
+    print(f"  - LiDAR BEV detections (1-channel grayscale): {output_path}/lidar/")
     print(f"  - Fused 3D boxes: {output_path}/fused_3d/")
 
 
