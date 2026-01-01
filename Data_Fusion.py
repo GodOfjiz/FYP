@@ -5,83 +5,14 @@ import os
 import glob
 from PIL import Image
 
-# Import functions from Lidar_BEV_Image.py
-from Lidar_BEV_Image import load_lidar_data
+# ============================================================================
+# File Loading Functions
+# ============================================================================
 
-# BEV parameters (must match your BEV creation)
-BEV_PARAMS = {
-    'x_range': (0.0, 100.0),
-    'y_range': (-82.5, 82.5),
-    'z_range': (-2.5, 1.5),
-    'resolution': 0.1,
-    'min_x': 2.0
-}
-
-def lidar_to_bev_array(
-    points,
-    x_range=(0.0, 100.0),
-    y_range=(-82.5, 82.5),
-    z_range=(-2.5, 1.5),
-    resolution=0.1,
-    min_x=2.0,
-):
-    """Convert LiDAR point cloud to BEV image"""
-    x = points[:, 0]
-    y = points[:, 1]
-    z = points[:, 2]
-    i = points[:, 3] if points.shape[1] > 3 else np.zeros_like(z)
-
-    mask = (
-        (x >= x_range[0]) & (x <= x_range[1]) &
-        (y >= y_range[0]) & (y <= y_range[1]) &
-        (z >= z_range[0]) & (z <= z_range[1]) &
-        (x >= min_x)
-    )
-    x, y, z, i = x[mask], y[mask], z[mask], i[mask]
-
-    H = int(np.ceil((x_range[1] - x_range[0]) / resolution))
-    W = int(np.ceil((y_range[1] - y_range[0]) / resolution))
-
-    ix = ((x - x_range[0]) / resolution).astype(np.int32)
-    iy = ((y - y_range[0]) / resolution).astype(np.int32)
-
-    valid = (ix >= 0) & (ix < H) & (iy >= 0) & (iy < W)
-    ix, iy, z, i = ix[valid], iy[valid], z[valid], i[valid]
-
-    height_map = np.full((H, W), -np.inf, dtype=np.float32)
-    intensity_map = np.zeros((H, W), dtype=np.float32)
-    density_map = np.zeros((H, W), dtype=np.float32)
-
-    np.maximum.at(height_map, (ix, iy), z)
-    np.maximum.at(intensity_map, (ix, iy), i)
-    np.add.at(density_map, (ix, iy), 1.0)
-
-    height_map[~np.isfinite(height_map)] = z_range[0]
-    height_norm = (np.clip(height_map, *z_range) - z_range[0]) / (z_range[1] - z_range[0])
-
-    p99 = np.percentile(intensity_map[intensity_map > 0], 99) if np.any(intensity_map > 0) else 1.0
-    intensity_norm = np.clip(intensity_map / (p99 + 1e-6), 0.0, 1.0)
-
-    density_norm = np.clip(np.log1p(density_map) / np.log(1.0 + 32.0), 0.0, 1.0)
-
-    bev = np.stack([density_norm, height_norm, intensity_norm], axis=-1)
-    bev_u8 = (bev * 255.0).astype(np.uint8)
-    bev_u8 = np.flipud(bev_u8)
-    bev_u8 = np.fliplr(bev_u8)
-
-    target_h = ((H + 31) // 32) * 32
-    target_w = ((W + 31) // 32) * 32
-    
-    pad_h = (target_h - H) // 2
-    pad_w = (target_w - W) // 2
-    
-    if H < target_h or W < target_w:
-        padded = np.zeros((target_h, target_w, 3), dtype=np.uint8)
-        padded[pad_h:pad_h+H, pad_w:pad_w+W] = bev_u8
-        bev_u8 = padded
-
-    return bev_u8, pad_h, pad_w, H, W
-
+def load_lidar_data(bin_file):
+    """Load LiDAR point cloud from binary file"""
+    points = np.fromfile(bin_file, dtype=np.float32).reshape(-1, 4)
+    return points
 
 def load_calibration(calib_file):
     """Load KITTI calibration file"""
@@ -102,382 +33,396 @@ def load_calibration(calib_file):
     
     return P2, R0_rect, Tr_velo_to_cam
 
+# ============================================================================
+# BEV Generation
+# ============================================================================
 
-def bev_box_to_realworld(bev_box, pad_h, pad_w, H, W, bev_params):
-    """
-    Convert BEV bounding box from pixels to real-world coordinates
-    Returns: (x_real, y_real, width_real, length_real) in meters
-    """
-    x1_bev, y1_bev, x2_bev, y2_bev = bev_box
-    
-    # Get center
-    cx_bev = (x1_bev + x2_bev) / 2
-    cy_bev = (y1_bev + y2_bev) / 2
-    
-    # Remove padding
-    cx_bev_unpadded = cx_bev - pad_w
-    cy_bev_unpadded = cy_bev - pad_h
-    
-    # Reverse horizontal flip (fliplr)
-    cx_bev_original = W - cx_bev_unpadded
-    
-    # Reverse vertical flip (flipud)
-    cy_bev_original = H - cy_bev_unpadded
-    
-    # Convert to real-world coordinates
-    # Note: In BEV creation, row (y) corresponds to X (forward), col (x) corresponds to Y (left-right)
-    x_real = bev_params['x_range'][0] + (cy_bev_original * bev_params['resolution'])
-    y_real = bev_params['y_range'][0] + (cx_bev_original * bev_params['resolution'])
-    
-    # Convert box dimensions
-    width_bev = x2_bev - x1_bev
-    height_bev = y2_bev - y1_bev
-    
-    width_real = width_bev * bev_params['resolution']
-    length_real = height_bev * bev_params['resolution']
-    
-    return x_real, y_real, width_real, length_real
+def lidar_to_bev_array(
+    points,
+    x_range=(0, 70),
+    y_range=(-40, 40),
+    z_range=(-2.5, 1.5),
+    resolution=0.1,
+    min_x=0.0,
+):
+    """Convert LiDAR points to BEV image array"""
+    x = points[:, 0]
+    y = points[:, 1]
+    z = points[:, 2]
+    i = points[:, 3] if points.shape[1] > 3 else np.zeros_like(z)
 
-
-def project_point_to_camera(point_3d_lidar, P2, R0_rect, Tr_velo_to_cam):
-    """
-    Project a 3D point from LiDAR coordinates to camera image
-    Returns: (pixel_x, pixel_y) or None if behind camera
-    """
-    # Convert to homogeneous coordinates
-    point_hom = np.array([point_3d_lidar[0], point_3d_lidar[1], point_3d_lidar[2], 1.0])
-    
-    # Transform to camera coordinates
-    point_cam = Tr_velo_to_cam @ point_hom
-    point_cam = R0_rect @ point_cam
-    
-    # Check if in front of camera
-    if point_cam[2] <= 0:
-        return None
-    
-    # Project to image
-    point_img = P2 @ point_cam
-    pixel_x = point_img[0] / point_img[2]
-    pixel_y = point_img[1] / point_img[2]
-    
-    return pixel_x, pixel_y
-
-
-def project_bev_detection_to_camera(bev_box, pad_h, pad_w, H, W, bev_params, P2, R0_rect, Tr_velo_to_cam, class_id):
-    """
-    Project BEV detection to camera image space for matching
-    Returns: [x1, y1, x2, y2] in camera image pixels, and 3D position
-    """
-    # Convert BEV box to real-world coordinates
-    x_real, y_real, width_real, length_real = bev_box_to_realworld(
-        bev_box, pad_h, pad_w, H, W, bev_params
+    # Filter ROI
+    mask = (
+        (x >= x_range[0]) & (x <= x_range[1]) &
+        (y >= y_range[0]) & (y <= y_range[1]) &
+        (z >= z_range[0]) & (z <= z_range[1]) &
+        (x >= min_x)
     )
-    
-    # Default heights based on class
-    class_heights = {
-        0: 1.5,   # Car
-        1: 1.7,   # Pedestrian
-        2: 1.7,   # Cyclist
-    }
-    default_height = class_heights.get(class_id, 1.5)
-    
-    # Assume object sits on ground (z = -1.65m is typical camera height in KITTI)
-    z_bottom = -1.65
-    z_top = z_bottom + default_height
-    
-    # Project 8 corners of approximate 3D box to get 2D bounding box
-    corners_3d = []
-    for dx in [-length_real/2, length_real/2]:
-        for dy in [-width_real/2, width_real/2]:
-            for dz in [z_bottom, z_top]:
-                corners_3d.append([x_real + dx, y_real + dy, dz])
-    
-    # Project all corners
-    projected_points = []
-    for corner in corners_3d:
-        pixel = project_point_to_camera(corner, P2, R0_rect, Tr_velo_to_cam)
-        if pixel is not None:
-            projected_points.append(pixel)
-    
-    if len(projected_points) < 4:
-        return None, None
-    
-    # Get 2D bounding box
-    projected_points = np.array(projected_points)
-    x1 = np.min(projected_points[:, 0])
-    y1 = np.min(projected_points[:, 1])
-    x2 = np.max(projected_points[:, 0])
-    y2 = np.max(projected_points[:, 1])
-    
-    return [x1, y1, x2, y2], (x_real, y_real, z_bottom + default_height/2)
+    x, y, z, i = x[mask], y[mask], z[mask], i[mask]
 
+    H = int(np.ceil((x_range[1] - x_range[0]) / resolution))  # 700 pixels
+    W = int(np.ceil((y_range[1] - y_range[0]) / resolution))  # 800 pixels
 
-def estimate_3d_from_fusion(cam_box, lidar_position, P2, class_id):
+    ix = ((x - x_range[0]) / resolution).astype(np.int32)
+    iy = ((y - y_range[0]) / resolution).astype(np.int32)
+
+    valid = (ix >= 0) & (ix < H) & (iy >= 0) & (iy < W)
+    ix, iy, z, i = ix[valid], iy[valid], z[valid], i[valid]
+
+    # Aggregate maps
+    height_map = np.full((H, W), -np.inf, dtype=np.float32)
+    intensity_map = np.zeros((H, W), dtype=np.float32)
+    density_map = np.zeros((H, W), dtype=np.float32)
+
+    np.maximum.at(height_map, (ix, iy), z)
+    np.maximum.at(intensity_map, (ix, iy), i)
+    np.add.at(density_map, (ix, iy), 1.0)
+
+    # Normalize height
+    height_map[~np.isfinite(height_map)] = z_range[0]
+    height_norm = (np.clip(height_map, *z_range) - z_range[0]) / (z_range[1] - z_range[0])
+
+    # Normalize intensity
+    p99 = np.percentile(intensity_map[intensity_map > 0], 99) if np.any(intensity_map > 0) else 1.0
+    intensity_norm = np.clip(intensity_map / (p99 + 1e-6), 0.0, 1.0)
+
+    # Normalize density
+    density_norm = np.clip(np.log1p(density_map) / np.log(1.0 + 32.0), 0.0, 1.0)
+
+    bev = np.stack([
+        density_norm,
+        height_norm,
+        intensity_norm
+    ], axis=-1)
+
+    bev_u8 = (bev * 255.0).astype(np.uint8)
+    bev_u8 = np.flipud(bev_u8)
+
+    return bev_u8, height_map  # Return both display image and raw height map
+
+# ============================================================================
+# LiDAR Height Extraction
+# ============================================================================
+
+def get_Lidar_Height_BEV_image(bev_image, bbox, z_range=(-2.5, 1.5)):
     """
-    Estimate 3D bounding box from matched camera + LiDAR detection
-    cam_box: [x1, y1, x2, y2] in camera image
-    lidar_position: (x, y, z) in camera coordinates
-    Returns: [h, w, l, x, y, z, rotation_y]
+    Extract maximum height and ground level from BEV bounding box
+    
+    Args:
+        bev_image: BEV image (H, W, 3) - RGB format
+        bbox: YOLO bbox [x_center, y_center, width, height] in normalized coords
+        z_range: Height range in meters
+    
+    Returns:
+        max_height_m: Maximum object height in meters
+        ground_height_m: Estimated ground height in meters
+        object_height_m: Object height above ground
     """
-    x1, y1, x2, y2 = cam_box
-    x_cam, y_cam, z_cam = lidar_position
+    green_channel = bev_image[:, :, 1]
+    img_h, img_w = green_channel.shape
     
-    # Get focal lengths from projection matrix
-    focal_length_x = P2[0, 0]
-    focal_length_y = P2[1, 1]
+    # Convert bbox to pixels
+    x_center, y_center, width, height = bbox
+    x1 = int((x_center - width/2) * img_w)
+    x2 = int((x_center + width/2) * img_w)
+    y1 = int((y_center - height/2) * img_h)
+    y2 = int((y_center + height/2) * img_h)
     
-    # Depth is the forward distance (Z in camera coordinates)
-    depth = z_cam
+    # Clamp to image bounds
+    x1, x2 = max(0, x1), min(img_w, x2)
+    y1, y2 = max(0, y1), min(img_h, y2)
     
-    # Estimate 3D height from 2D box height
-    pixel_height = y2 - y1
-    height_3d = (pixel_height * depth) / focal_length_y
+    # Extract bbox region
+    bbox_region = green_channel[y1:y2, x1:x2]
     
-    # Estimate 3D width from 2D box width
-    pixel_width = x2 - x1
-    width_3d = (pixel_width * depth) / focal_length_x
+    # Get max height in bbox
+    max_green = np.max(bbox_region) if bbox_region.size > 0 else 0
     
-    # Default lengths based on class
-    class_lengths = {
-        0: 3.9,   # Car
-        1: 0.8,   # Pedestrian
-        2: 1.7,   # Cyclist
-    }
-    length_3d = class_lengths.get(class_id, 3.9)
+    # Estimate ground using percentile from expanded region
+    margin = 20
+    y1_exp = max(0, y1 - margin)
+    y2_exp = min(img_h, y2 + margin)
+    x1_exp = max(0, x1 - margin)
+    x2_exp = min(img_w, x2 + margin)
     
-    # Clamp dimensions to reasonable ranges
-    height_3d = np.clip(height_3d, 0.5, 3.0)
-    width_3d = np.clip(width_3d, 0.5, 2.5)
+    expanded_region = green_channel[y1_exp:y2_exp, x1_exp:x2_exp]
+    valid_pixels = expanded_region[expanded_region > 0]
     
-    # Position
-    x_center = x_cam
-    y_center = y_cam
-    z_center = z_cam
+    if len(valid_pixels) > 0:
+        ground_green = np.percentile(valid_pixels, 5)  # 5th percentile as ground
+    else:
+        ground_green = 0
     
-    return [height_3d, width_3d, length_3d, x_center, y_center, z_center, 0.0]
+    # Convert to meters
+    max_height_m = (max_green / 255.0) * (z_range[1] - z_range[0]) + z_range[0]
+    ground_height_m = (ground_green / 255.0) * (z_range[1] - z_range[0]) + z_range[0]
+    object_height_m = max_height_m - ground_height_m
+    
+    return max_height_m, ground_height_m, object_height_m
 
+# ============================================================================
+# BEV Corner Extraction
+# ============================================================================
 
-def compute_iou(box1, box2):
-    """Compute IoU between two boxes [x1, y1, x2, y2]"""
-    x1 = max(box1[0], box2[0])
-    y1 = max(box1[1], box2[1])
-    x2 = min(box1[2], box2[2])
-    y2 = min(box1[3], box2[3])
-    
-    if x2 < x1 or y2 < y1:
-        return 0.0
-    
-    intersection = (x2 - x1) * (y2 - y1)
-    area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
-    area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
-    union = area1 + area2 - intersection
-    
-    return intersection / union if union > 0 else 0.0
-
-
-def fuse_detections(camera_results, lidar_results, pad_h, pad_w, H, W, bev_params, 
-                    P2, R0_rect, Tr_velo_to_cam, fusion_method='weighted'):
+def get_Lidar_Corners_BEV_image(bbox, bev_shape, x_range=(0, 70), y_range=(-40, 40)):
     """
-    Fuse camera and LiDAR detections (now properly in same coordinate system)
-    Returns: list of [x1, y1, x2, y2, conf, cls, source, box_3d]
+    Get 4 corners of BEV bounding box in LiDAR coordinates (meters)
+    
+    Args:
+        bbox: YOLO bbox [x_center, y_center, width, height] in normalized coords
+        bev_shape: (height, width) of BEV image
+        x_range: Forward range in meters
+        y_range: Left-right range in meters
+    
+    Returns:
+        corners_3d: Array of shape (4, 2) with [x, y] in LiDAR coords (meters)
+                    Order: [front-left, front-right, rear-right, rear-left]
     """
-    camera_dets = []
-    lidar_dets_camera_space = []
-    lidar_positions_3d = []
+    img_h, img_w = bev_shape[:2]
     
-    # Extract camera detections (already in camera image space)
-    if camera_results and len(camera_results[0].boxes) > 0:
-        boxes = camera_results[0].boxes
-        for i in range(len(boxes)):
-            x1, y1, x2, y2 = boxes.xyxy[i].cpu().numpy()
-            conf = float(boxes.conf[i].cpu().numpy())
-            cls = int(boxes.cls[i].cpu().numpy())
-            camera_dets.append([x1, y1, x2, y2, conf, cls, 'camera', None])
+    # Convert normalized bbox to pixels
+    x_center, y_center, width, height = bbox
+    x_center_px = x_center * img_w
+    y_center_px = y_center * img_h
+    width_px = width * img_w
+    height_px = height * img_h
     
-    # Convert LiDAR BEV detections to camera image space
-    if lidar_results and len(lidar_results[0].boxes) > 0:
-        boxes = lidar_results[0].boxes
-        for i in range(len(boxes)):
-            x1_bev, y1_bev, x2_bev, y2_bev = boxes.xyxy[i].cpu().numpy()
-            conf = float(boxes.conf[i].cpu().numpy())
-            cls = int(boxes.cls[i].cpu().numpy())
-            
-            # Project to camera image space
-            cam_box, position_3d = project_bev_detection_to_camera(
-                [x1_bev, y1_bev, x2_bev, y2_bev],
-                pad_h, pad_w, H, W, bev_params,
-                P2, R0_rect, Tr_velo_to_cam, cls
-            )
-            
-            if cam_box is not None:
-                lidar_dets_camera_space.append(cam_box + [conf, cls, 'lidar', None])
-                lidar_positions_3d.append(position_3d)
+    # Get 4 corners in pixel coordinates
+    x1 = x_center_px - width_px / 2
+    x2 = x_center_px + width_px / 2
+    y1 = y_center_px - height_px / 2
+    y2 = y_center_px + height_px / 2
     
-    # Now both are in camera image space - can do proper matching
-    fused = []
-    used_lidar = set()
+    # Remember: BEV is flipped (flipud), so y-axis is inverted
+    # Top of image (y=0) = far forward (x=70m)
+    # Bottom of image (y=H) = near (x=0m)
     
-    for cam_det in camera_dets:
-        best_match = None
-        best_match_3d = None
-        best_iou = 0.3
-        best_idx = -1
-        
-        for idx, lid_det in enumerate(lidar_dets_camera_space):
-            if idx in used_lidar:
-                continue
-            if cam_det[5] != lid_det[5]:  # Different class
-                continue
-            
-            iou = compute_iou(cam_det[:4], lid_det[:4])
-            if iou > best_iou:
-                best_iou = iou
-                best_match = lid_det
-                best_match_3d = lidar_positions_3d[idx]
-                best_idx = idx
-        
-        if best_match:
-            used_lidar.add(best_idx)
-            
-            # Create fused 2D box
-            if fusion_method == 'weighted':
-                fused_box = [(cam_det[i] + best_match[i]) / 2 for i in range(4)]
-                fused_conf = (cam_det[4] + best_match[4]) / 2
-            elif fusion_method == 'max':
-                if cam_det[4] > best_match[4]:
-                    fused_box = cam_det[:4]
-                    fused_conf = cam_det[4]
-                else:
-                    fused_box = best_match[:4]
-                    fused_conf = best_match[4]
-            else:
-                fused_box = cam_det[:4]
-                fused_conf = cam_det[4]
-            
-            # Estimate 3D box using camera height + LiDAR position
-            box_3d = estimate_3d_from_fusion(
-                fused_box, best_match_3d, P2, cam_det[5]
-            )
-            
-            fused.append(fused_box + [fused_conf, cam_det[5], 'fused', box_3d])
-        else:
-            # Camera only - estimate 3D using default depth
-            fused.append(cam_det)
+    # Convert pixels to LiDAR coordinates
+    resolution = (x_range[1] - x_range[0]) / img_h
     
-    # Add unmatched LiDAR detections
-    for idx, lid_det in enumerate(lidar_dets_camera_space):
-        if idx not in used_lidar:
-            # Create 3D box from LiDAR position
-            position_3d = lidar_positions_3d[idx]
-            box_3d = estimate_3d_from_fusion(
-                lid_det[:4], position_3d, P2, lid_det[5]
-            )
-            lid_det[7] = box_3d
-            fused.append(lid_det)
+    # Top-left corner (front-left in real world)
+    fl_x = x_range[1] - (y1 * resolution)  # Inverted due to flipud
+    fl_y = y_range[0] + (x1 * resolution * (y_range[1] - y_range[0]) / (x_range[1] - x_range[0]))
     
-    return fused
-
-
-def draw_3d_box(image, box_3d, P2, R0_rect, color=(0, 255, 0), thickness=2):
-    """
-    Draw 3D bounding box on image
-    box_3d: [h, w, l, x, y, z, rotation_y]
-    """
-    if box_3d is None:
-        return image
+    # Top-right corner (front-right)
+    fr_x = x_range[1] - (y1 * resolution)
+    fr_y = y_range[0] + (x2 * resolution * (y_range[1] - y_range[0]) / (x_range[1] - x_range[0]))
     
-    h, w, l, x, y, z, ry = box_3d
+    # Bottom-right corner (rear-right)
+    rr_x = x_range[1] - (y2 * resolution)
+    rr_y = y_range[0] + (x2 * resolution * (y_range[1] - y_range[0]) / (x_range[1] - x_range[0]))
     
-    # 3D bounding box corners in camera coordinate system
-    corners_3d = np.array([
-        [l/2, 0, w/2],      # Front-right-bottom
-        [l/2, 0, -w/2],     # Front-left-bottom
-        [-l/2, 0, -w/2],    # Back-left-bottom
-        [-l/2, 0, w/2],     # Back-right-bottom
-        [l/2, -h, w/2],     # Front-right-top
-        [l/2, -h, -w/2],    # Front-left-top
-        [-l/2, -h, -w/2],   # Back-left-top
-        [-l/2, -h, w/2],    # Back-right-top
+    # Bottom-left corner (rear-left)
+    rl_x = x_range[1] - (y2 * resolution)
+    rl_y = y_range[0] + (x1 * resolution * (y_range[1] - y_range[0]) / (x_range[1] - x_range[0]))
+    
+    corners_2d = np.array([
+        [fl_x, fl_y],  # Front-left
+        [fr_x, fr_y],  # Front-right
+        [rr_x, rr_y],  # Rear-right
+        [rl_x, rl_y]   # Rear-left
     ])
     
-    # Rotation matrix around Y-axis
-    R = np.array([
-        [np.cos(ry), 0, np.sin(ry)],
-        [0, 1, 0],
-        [-np.sin(ry), 0, np.cos(ry)]
-    ])
+    return corners_2d
+
+# ============================================================================
+# Coordinate Transformation
+# ============================================================================
+
+def Lidar_Coords_to_Camera_Coords(lidar_points, R0_rect, Tr_velo_to_cam):
+    """
+    Transform LiDAR coordinates to camera coordinates
     
-    # Rotate and translate
-    corners_3d = corners_3d @ R.T
-    corners_3d[:, 0] += x
-    corners_3d[:, 1] += y
-    corners_3d[:, 2] += z
+    Args:
+        lidar_points: (N, 2) or (N, 3) array of [x, y] or [x, y, z] in LiDAR coords
+        R0_rect: 4x4 rectification matrix
+        Tr_velo_to_cam: 4x4 velodyne to camera transformation
+    
+    Returns:
+        cam_points: (N, 3) array of [x, y, z] in camera coordinates
+    """
+    # If 2D points (x, y), add z=0 for ground plane
+    if lidar_points.shape[1] == 2:
+        lidar_points_3d = np.hstack([
+            lidar_points,
+            np.zeros((lidar_points.shape[0], 1))
+        ])
+    else:
+        lidar_points_3d = lidar_points
     
     # Convert to homogeneous coordinates
-    corners_3d_hom = np.hstack([corners_3d, np.ones((8, 1))])
+    N = lidar_points_3d.shape[0]
+    lidar_hom = np.hstack([lidar_points_3d, np.ones((N, 1))])  # (N, 4)
+    
+    # Transform: LiDAR -> Camera -> Rectified Camera
+    cam_hom = (R0_rect @ Tr_velo_to_cam @ lidar_hom.T).T  # (N, 4)
+    
+    # Convert back to 3D
+    cam_points = cam_hom[:, :3]
+    
+    return cam_points
+
+# ============================================================================
+# 3D to 2D Projection
+# ============================================================================
+
+def project_Lidar_Converted_Points_to_Camera_Image(cam_points_3d, P2):
+    """
+    Project 3D camera coordinates to 2D image coordinates
+    
+    Args:
+        cam_points_3d: (N, 3) array of [x, y, z] in camera coords
+        P2: 3x4 camera projection matrix
+    
+    Returns:
+        image_points: (N, 2) array of [u, v] pixel coordinates
+        valid_mask: Boolean mask of points in front of camera (z > 0)
+    """
+    # Convert to homogeneous coordinates
+    N = cam_points_3d.shape[0]
+    cam_hom = np.hstack([cam_points_3d, np.ones((N, 1))])  # (N, 4)
     
     # Project to image plane
-    corners_img = corners_3d_hom @ R0_rect.T @ P2.T
-    corners_img[:, 0] /= corners_img[:, 2]
-    corners_img[:, 1] /= corners_img[:, 2]
-    corners_2d = corners_img[:, :2].astype(np.int32)
+    img_hom = (P2 @ cam_hom.T).T  # (N, 3)
     
-    # Draw the 12 edges of the 3D box
-    edges = [
-        # Bottom face
-        (0, 1), (1, 2), (2, 3), (3, 0),
-        # Top face
-        (4, 5), (5, 6), (6, 7), (7, 4),
-        # Vertical edges
-        (0, 4), (1, 5), (2, 6), (3, 7)
-    ]
+    # Normalize by depth
+    valid_mask = img_hom[:, 2] > 0  # Points in front of camera
     
-    for start, end in edges:
-        cv2.line(image, tuple(corners_2d[start]), tuple(corners_2d[end]), color, thickness)
+    image_points = np.zeros((N, 2))
+    image_points[valid_mask] = img_hom[valid_mask, :2] / img_hom[valid_mask, 2:3]
     
-    # Draw front face differently (thicker)
-    front_edges = [(0, 1), (1, 5), (5, 4), (4, 0)]
-    for start, end in front_edges:
-        cv2.line(image, tuple(corners_2d[start]), tuple(corners_2d[end]), color, thickness + 1)
+    return image_points, valid_mask
+
+# ============================================================================
+# Detection Matching
+# ============================================================================
+
+def Combine_Camera_and_Lidar_Detections(camera_boxes, lidar_boxes, iou_threshold=0.1):
+    """
+    Match camera and LiDAR detections using 2D IoU
+    
+    Args:
+        camera_boxes: List of camera detections (YOLO results)
+        lidar_boxes: List of LiDAR detections (YOLO results)
+        iou_threshold: Minimum IoU for matching
+    
+    Returns:
+        matches: List of (camera_idx, lidar_idx) tuples
+    """
+    def box_iou(box1, box2):
+        """Calculate IoU between two boxes [x_center, y_center, width, height]"""
+        # Convert to [x1, y1, x2, y2]
+        b1_x1 = box1[0] - box1[2] / 2
+        b1_y1 = box1[1] - box1[3] / 2
+        b1_x2 = box1[0] + box1[2] / 2
+        b1_y2 = box1[1] + box1[3] / 2
+        
+        b2_x1 = box2[0] - box2[2] / 2
+        b2_y1 = box2[1] - box2[3] / 2
+        b2_x2 = box2[0] + box2[2] / 2
+        b2_y2 = box2[1] + box2[3] / 2
+        
+        # Intersection
+        inter_x1 = max(b1_x1, b2_x1)
+        inter_y1 = max(b1_y1, b2_y1)
+        inter_x2 = min(b1_x2, b2_x2)
+        inter_y2 = min(b1_y2, b2_y2)
+        
+        inter_area = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+        
+        # Union
+        b1_area = (b1_x2 - b1_x1) * (b1_y2 - b1_y1)
+        b2_area = (b2_x2 - b2_x1) * (b2_y2 - b2_y1)
+        union_area = b1_area + b2_area - inter_area
+        
+        return inter_area / union_area if union_area > 0 else 0
+    
+    matches = []
+    used_lidar = set()
+    
+    for cam_idx, cam_box in enumerate(camera_boxes):
+        best_iou = 0
+        best_lidar_idx = -1
+        
+        for lidar_idx, lidar_box in enumerate(lidar_boxes):
+            if lidar_idx in used_lidar:
+                continue
+            
+            # Project LiDAR bbox to camera view for comparison
+            # For simplicity, we'll use spatial proximity heuristic
+            # In practice, you'd project LiDAR bbox corners to camera
+            iou = box_iou(cam_box[:4], lidar_box[:4])
+            
+            if iou > best_iou and iou > iou_threshold:
+                best_iou = iou
+                best_lidar_idx = lidar_idx
+        
+        if best_lidar_idx >= 0:
+            matches.append((cam_idx, best_lidar_idx))
+            used_lidar.add(best_lidar_idx)
+    
+    return matches
+
+# ============================================================================
+# 3D Box Drawing
+# ============================================================================
+
+def draw_3d_box(image, corners_2d, color=(0, 255, 0), thickness=2):
+    """
+    Draw 3D bounding box on image
+    
+    Args:
+        image: Input image
+        corners_2d: (8, 2) array of projected corners
+                    Order: [fbl, fbr, frr, frl, rbl, rbr, rrr, rrl]
+                           (front-bottom-left, etc.)
+        color: Box color (BGR)
+        thickness: Line thickness
+    """
+    corners_2d = corners_2d.astype(np.int32)
+    
+    # Front face (bottom 4 points)
+    for i in range(4):
+        cv2.line(image, tuple(corners_2d[i]), tuple(corners_2d[(i+1)%4]), color, thickness)
+    
+    # Rear face (top 4 points)
+    for i in range(4, 8):
+        cv2.line(image, tuple(corners_2d[i]), tuple(corners_2d[4 + (i+1)%4]), color, thickness)
+    
+    # Vertical edges
+    for i in range(4):
+        cv2.line(image, tuple(corners_2d[i]), tuple(corners_2d[i+4]), color, thickness)
     
     return image
 
-
-def visualize_fused_detections(image, detections, P2, R0_rect, class_names):
-    """Draw fused detections with 3D boxes on camera image"""
+def save_fused_detections(image, corners_3d_list, output_path, labels=None):
+    """
+    Save image with projected 3D boxes
+    
+    Args:
+        image: Camera image
+        corners_3d_list: List of (8, 2) corner arrays
+        output_path: Output file path
+        labels: Optional list of label strings
+    """
     result_img = image.copy()
     
-    colors = {
-        'camera': (255, 0, 0),     # Blue
-        'lidar': (0, 0, 255),      # Red
-        'fused': (0, 255, 0)       # Green
-    }
+    for idx, corners_2d in enumerate(corners_3d_list):
+        # Draw 3D box
+        result_img = draw_3d_box(result_img, corners_2d, color=(0, 255, 0), thickness=2)
+        
+        # Add label if provided
+        if labels and idx < len(labels):
+            label_pos = tuple(corners_2d[0].astype(np.int32))
+            cv2.putText(result_img, labels[idx], label_pos, 
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
     
-    for det in detections:
-        x1, y1, x2, y2, conf, cls, source, box_3d = det
-        
-        color = colors.get(source, (255, 255, 255))
-        
-        # Draw 3D box if available
-        if box_3d is not None:
-            result_img = draw_3d_box(result_img, box_3d, P2, R0_rect, color, thickness=2)
-        
-        # Draw 2D box
-        x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
-        cv2.rectangle(result_img, (x1, y1), (x2, y2), color, 2)
-        
-        # Draw label
-        label = f"{class_names[int(cls)]} {conf:.2f}"
-        if box_3d is not None:
-            depth = box_3d[5]  # z coordinate
-            label += f" {depth:.1f}m"
-        
-        (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-        cv2.rectangle(result_img, (x1, y1 - label_h - 10), (x1 + label_w + 5, y1), color, -1)
-        cv2.putText(result_img, label, (x1 + 2, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-    
+    cv2.imwrite(output_path, result_img)
     return result_img
 
+# ============================================================================
+# Main Processing
+# ============================================================================
 
 def main():
     # Load models
@@ -508,70 +453,111 @@ def main():
     # Get class names
     class_names = camera_model.names
     
+    print(f"\nProcessing {len(camera_files)} samples...")
+    print("="*60)
+    
     # Process each sample
     for idx, (cam_file, bin_file) in enumerate(zip(camera_files, bin_files)):
         file_id = os.path.splitext(os.path.basename(cam_file))[0]
         calib_file = os.path.join(calib_path, f"{file_id}.txt")
         
         try:
-            # Load calibration
-            if os.path.exists(calib_file):
-                P2, R0_rect, Tr_velo_to_cam = load_calibration(calib_file)
-            else:
-                print(f"Warning: Calibration file not found for {file_id}, skipping")
-                continue
-            
-            # Load camera image
+            # ================================================================
+            # 1. Load data
+            # ================================================================
             camera_image = cv2.imread(cam_file)
-            
-            # Load LiDAR points
             points = load_lidar_data(bin_file)
+            P2, R0_rect, Tr_velo_to_cam = load_calibration(calib_file)
             
-            # Convert LiDAR to BEV for detection
-            bev_image, pad_h, pad_w, H, W = lidar_to_bev_array(
-                points,
-                **BEV_PARAMS
-            )
+            # ================================================================
+            # 2. Camera inference
+            # ================================================================
+            cam_results = camera_model.predict(source=camera_image, save=False, verbose=False)
+            cam_detections = cam_results[0].boxes
             
-            # Run inference
-            camera_results = camera_model.predict(source=camera_image, save=False, verbose=False)
+            # Save camera result
+            cam_viz = cam_results[0].plot()
+            cv2.imwrite(f"{output_path}/camera/{file_id}.png", cam_viz)
+            
+            # ================================================================
+            # 3. LiDAR inference
+            # ================================================================
+            bev_image, height_map = lidar_to_bev_array(points)
             lidar_results = lidar_model.predict(source=bev_image, save=False, verbose=False)
+            lidar_detections = lidar_results[0].boxes
             
-            # Fuse detections (now with proper coordinate transformation)
-            fused_detections = fuse_detections(
-                camera_results, lidar_results,
-                pad_h, pad_w, H, W, BEV_PARAMS,
-                P2, R0_rect, Tr_velo_to_cam,
-                fusion_method='weighted'
+            # Save LiDAR result
+            lidar_viz = lidar_results[0].plot()
+            cv2.imwrite(f"{output_path}/lidar/{file_id}.png", lidar_viz)
+            
+            # ================================================================
+            # 4. Process each LiDAR detection
+            # ================================================================
+            corners_3d_list = []
+            labels_list = []
+            
+            for det in lidar_detections:
+                # Get bbox in normalized coords
+                bbox = det.xywhn[0].cpu().numpy()  # [x_center, y_center, width, height]
+                cls = int(det.cls[0])
+                conf = float(det.conf[0])
+                
+                # Extract height
+                max_h, ground_h, obj_h = get_Lidar_Height_BEV_image(bev_image, bbox)
+                
+                # Get 2D corners in LiDAR coords
+                corners_2d = get_Lidar_Corners_BEV_image(bbox, bev_image.shape)
+                
+                # Create 8 corners (4 ground + 4 top)
+                corners_ground = np.hstack([corners_2d, np.full((4, 1), ground_h)])
+                corners_top = np.hstack([corners_2d, np.full((4, 1), max_h)])
+                corners_3d_lidar = np.vstack([corners_ground, corners_top])
+                
+                # Transform to camera coordinates
+                corners_3d_cam = Lidar_Coords_to_Camera_Coords(
+                    corners_3d_lidar, R0_rect, Tr_velo_to_cam
+                )
+                
+                # Project to image
+                corners_2d_img, valid = project_Lidar_Converted_Points_to_Camera_Image(
+                    corners_3d_cam, P2
+                )
+                
+                # Only keep if all corners are valid and in image bounds
+                img_h, img_w = camera_image.shape[:2]
+                in_bounds = np.all(
+                    (corners_2d_img[:, 0] >= 0) & 
+                    (corners_2d_img[:, 0] < img_w) &
+                    (corners_2d_img[:, 1] >= 0) & 
+                    (corners_2d_img[:, 1] < img_h)
+                )
+                
+                if np.all(valid) and in_bounds:
+                    corners_3d_list.append(corners_2d_img)
+                    label = f"{class_names[cls]} {conf:.2f} H:{obj_h:.2f}m"
+                    labels_list.append(label)
+            
+            # ================================================================
+            # 5. Save fused result
+            # ================================================================
+            fused_img = save_fused_detections(
+                camera_image,
+                corners_3d_list,
+                f"{output_path}/fused_3d/{file_id}.png",
+                labels_list
             )
             
-            # Save individual results
-            camera_result_img = camera_results[0].plot()
-            cv2.imwrite(f"{output_path}/camera/{file_id}.png", camera_result_img)
-            
-            lidar_result_img = lidar_results[0].plot()
-            cv2.imwrite(f"{output_path}/lidar/{file_id}.png", lidar_result_img)
-            
-            # Visualize fused 3D boxes
-            fused_3d_img = visualize_fused_detections(
-                camera_image, fused_detections, P2, R0_rect, class_names
-            )
-            cv2.imwrite(f"{output_path}/fused_3d/{file_id}.png", fused_3d_img)
-            
-            # Count detections with 3D boxes
-            num_3d = sum(1 for det in fused_detections if det[7] is not None)
-            
-            print(f"[{idx+1}/{len(camera_files)}] Processed: {file_id} - "
-                  f"Cam: {len(camera_results[0].boxes)}, "
-                  f"LiDAR: {len(lidar_results[0].boxes)}, "
-                  f"Fused: {len(fused_detections)} ({num_3d} with 3D)")
+            print(f"  [{idx+1}/{len(camera_files)}] {file_id}: "
+                  f"Cam={len(cam_detections)} LiDAR={len(lidar_detections)} "
+                  f"Fused={len(corners_3d_list)}")
             
         except Exception as e:
-            print(f"[{idx+1}/{len(camera_files)}] Error processing {file_id}: {str(e)}")
+            print(f"  [{idx+1}/{len(camera_files)}] Error processing {file_id}: {str(e)}")
             import traceback
             traceback.print_exc()
     
-    print(f"\nCompleted! Results saved to: {output_path}")
+    print("\n" + "="*60)
+    print(f"Completed! Results saved to: {output_path}")
     print(f"  - Camera detections (2D): {output_path}/camera/")
     print(f"  - LiDAR BEV detections: {output_path}/lidar/")
     print(f"  - Fused 3D boxes: {output_path}/fused_3d/")
