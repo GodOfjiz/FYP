@@ -3,6 +3,8 @@ test: test/images
 train: train/images
 val: val/images
 
+channels: 1
+
 nc: 6
 names:
   0: Car
