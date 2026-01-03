@@ -87,8 +87,9 @@ def lidar_to_bev_array(
     
     # Flip vertically (forward points upward)
     bev_u8 = np.flipud(bev_u8)
+    height_map_flipped = np.flipud(height_map)
 
-    return bev_u8, height_map  # Return both display image (H, W) and raw height map
+    return bev_u8, height_map_flipped
 
 # ============================================================================
 # LiDAR Height Extraction
@@ -151,7 +152,7 @@ def get_Lidar_Height_BEV_image(bev_image, bbox, z_range=(-2.5, 1.5)):
     return max_height_m, ground_height_m, object_height_m
 
 # ============================================================================
-# BEV Corner Extraction
+# BEV Corner Extraction (FIXED)
 # ============================================================================
 
 def get_Lidar_Corners_BEV_image(bbox, bev_shape, x_range=(0, 70), y_range=(-40, 40)):
@@ -165,7 +166,7 @@ def get_Lidar_Corners_BEV_image(bbox, bev_shape, x_range=(0, 70), y_range=(-40, 
         y_range: Left-right range in meters
     
     Returns:
-        corners_3d: Array of shape (4, 2) with [x, y] in LiDAR coords (meters)
+        corners_2d: Array of shape (4, 2) with [x, y] in LiDAR coords (meters)
                     Order: [front-left, front-right, rear-right, rear-left]
     """
     # Handle both 2D and 3D shapes
@@ -182,33 +183,39 @@ def get_Lidar_Corners_BEV_image(bbox, bev_shape, x_range=(0, 70), y_range=(-40, 
     height_px = height * img_h
     
     # Get 4 corners in pixel coordinates
-    x1 = x_center_px - width_px / 2
-    x2 = x_center_px + width_px / 2
-    y1 = y_center_px - height_px / 2
-    y2 = y_center_px + height_px / 2
+    x1 = x_center_px - width_px / 2  # Left edge (column)
+    x2 = x_center_px + width_px / 2  # Right edge (column)
+    y1 = y_center_px - height_px / 2  # Top edge (row)
+    y2 = y_center_px + height_px / 2  # Bottom edge (row)
     
-    # Remember: BEV is flipped (flipud), so y-axis is inverted
-    # Top of image (y=0) = far forward (x=70m)
-    # Bottom of image (y=H) = near (x=0m)
+    # Calculate resolutions
+    # img_h (rows) corresponds to x direction (forward)
+    # img_w (cols) corresponds to y direction (lateral)
+    resolution_x = (x_range[1] - x_range[0]) / img_h  # meters per row
+    resolution_y = (y_range[1] - y_range[0]) / img_w  # meters per column
     
-    # Convert pixels to LiDAR coordinates
-    resolution = (x_range[1] - x_range[0]) / img_h
+    # After flipud():
+    # - Row 0 (top) = far forward (x = 70m)
+    # - Row H-1 (bottom) = near (x = 0m)
+    # - Column 0 (left) = left side (y = -40m)
+    # - Column W-1 (right) = right side (y = 40m)
     
-    # Top-left corner (front-left in real world)
-    fl_x = x_range[1] - (y1 * resolution)  # Inverted due to flipud
-    fl_y = y_range[0] + (x1 * resolution * (y_range[1] - y_range[0]) / (x_range[1] - x_range[0]))
+    # Convert pixel corners to LiDAR coordinates
+    # Front-left corner (top-left in image)
+    fl_x = x_range[1] - y1 * resolution_x
+    fl_y = y_range[0] + x1 * resolution_y
     
-    # Top-right corner (front-right)
-    fr_x = x_range[1] - (y1 * resolution)
-    fr_y = y_range[0] + (x2 * resolution * (y_range[1] - y_range[0]) / (x_range[1] - x_range[0]))
+    # Front-right corner (top-right in image)
+    fr_x = x_range[1] - y1 * resolution_x
+    fr_y = y_range[0] + x2 * resolution_y
     
-    # Bottom-right corner (rear-right)
-    rr_x = x_range[1] - (y2 * resolution)
-    rr_y = y_range[0] + (x2 * resolution * (y_range[1] - y_range[0]) / (x_range[1] - x_range[0]))
+    # Rear-right corner (bottom-right in image)
+    rr_x = x_range[1] - y2 * resolution_x
+    rr_y = y_range[0] + x2 * resolution_y
     
-    # Bottom-left corner (rear-left)
-    rl_x = x_range[1] - (y2 * resolution)
-    rl_y = y_range[0] + (x1 * resolution * (y_range[1] - y_range[0]) / (x_range[1] - x_range[0]))
+    # Rear-left corner (bottom-left in image)
+    rl_x = x_range[1] - y2 * resolution_x
+    rl_y = y_range[0] + x1 * resolution_y
     
     corners_2d = np.array([
         [fl_x, fl_y],  # Front-left
@@ -421,7 +428,7 @@ def save_fused_detections(image, corners_3d_list, output_path, labels=None):
 def main():
     # Load models
     print("Loading models...")
-    camera_model = YOLO("./Jetson_yolov11n-kitti-Cam-only-4/train/weights/best.pt")
+    camera_model = YOLO("./Jetson_yolov11n-kitti-Cam-only-5/train/weights/best.pt")
     lidar_model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-4/train/weights/best.pt")
     
     # Define paths
@@ -448,6 +455,11 @@ def main():
     class_names = camera_model.names
     
     print(f"\nProcessing {len(camera_files)} samples...")
+    print("="*60)
+    print("BEV Format: 1-channel grayscale (height only)")
+    print("  Dark = Ground level (-2.5m)")
+    print("  Bright = Elevated points (+1.5m)")
+    print("="*60)
     
     # Process each sample
     for idx, (cam_file, bin_file) in enumerate(zip(camera_files, bin_files)):

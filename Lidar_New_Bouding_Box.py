@@ -133,46 +133,40 @@ def check_points_in_box_3d(points_velo, corners_velo, min_points=3):
     num_points = np.sum(mask)
     return num_points >= min_points, num_points
 
-def velodyne_to_bev_coords(points_velo, y_range=(-82.5, 82.5), x_range=(0.0, 100.0), resolution=0.1, image_size=(1664, 1024)):
+def velodyne_to_bev_coords(points_velo, y_range=(-40, 40), x_range=(0, 70), resolution=0.1, image_size=(800, 700)):
     """
     Convert velodyne coordinates to BEV pixel coordinates
-    Accounts for both vertical AND horizontal flips, plus padding
+    Accounts for vertical flip only (no horizontal flip, no padding)
     
     Args:
-        y_range: left-right range in meters
-        x_range: forward range in meters  
+        y_range: left-right range in meters (-40, 40)
+        x_range: forward range in meters (0, 70)
         resolution: meters per pixel (0.1m = 10cm per pixel)
-        image_size: (width, height) of final padded image
+        image_size: (width, height) of image (800, 700)
     """
     x = points_velo[:, 0]  # Forward
     y = points_velo[:, 1]  # Left-right
     
-    # Original grid size before padding
-    H_orig = int(np.ceil((x_range[1] - x_range[0]) / resolution))  # 1000
-    W_orig = int(np.ceil((y_range[1] - y_range[0]) / resolution))  # 1650
+    # Grid size (no padding)
+    H = int(np.ceil((x_range[1] - x_range[0]) / resolution))  # 700 pixels
+    W = int(np.ceil((y_range[1] - y_range[0]) / resolution))  # 800 pixels
     
-    # Padding offsets
     img_w, img_h = image_size
-    pad_h = (img_h - H_orig) // 2  
-    pad_w = (img_w - W_orig) // 2
     
     # Convert to grid indices (before any flips)
     ix = ((x - x_range[0]) / resolution).astype(int)
     iy = ((y - y_range[0]) / resolution).astype(int)
     
-    # Apply vertical flip (flipud): row 0 becomes row (H_orig-1)
-    ix_flipped = (H_orig - 1) - ix
+    # Apply vertical flip only (flipud): row 0 becomes row (H-1)
+    ix_flipped = (H - 1) - ix
     
-    # Apply horizontal flip (fliplr): col 0 becomes col (W_orig-1)
-    iy_flipped = (W_orig - 1) - iy
-    
-    # Add padding offsets
-    y_img = ix_flipped + pad_h  # Final row in padded image
-    x_img = iy_flipped + pad_w  # Final column in padded image
+    # No horizontal flip, no padding
+    y_img = ix_flipped  # Final row in image
+    x_img = iy          # Final column in image
     
     return x_img, y_img, img_w, img_h
 
-def get_bev_bbox(corners_velo, y_range=(-82.5, 82.5), x_range=(0.0, 100.0), resolution=0.1, image_size=(1664, 1024), padding_factor=1.15):
+def get_bev_bbox(corners_velo, y_range=(-40, 40), x_range=(0, 70), resolution=0.1, image_size=(800, 700), padding_factor=1.15):
     """
     Get axis-aligned bounding box in BEV image coordinates
     Returns normalized YOLO format: x_center, y_center, width, height (all 0-1)
@@ -246,16 +240,16 @@ def generate_yolo_labels():
     # Classes to include in output
     output_classes = ['Car', 'Van', 'Truck', 'Pedestrian', 'Cyclist', 'Tram']
     
-    # BEV parameters with 0.1m resolution (10cm per pixel)
-    y_range = (-82.5, 82.5)  # 165m total left-right
-    x_range = (0.0, 100.0)   # 100m forward
+    # BEV parameters with 0.1m resolution (10cm per pixel) - UPDATED
+    y_range = (-40, 40)      # 80m total left-right
+    x_range = (0, 70)        # 70m forward
     resolution = 0.1         # 0.1m per pixel (HIGH RESOLUTION)
     
     # Image size calculation:
-    # H = 100 / 0.1 = 1000 pixels
-    # W = 165 / 0.1 = 1650 pixels
-    # Adding padding: 1664 x 1024 (divisible by 32 for YOLO)
-    image_size = (1664, 1024)  # width × height (padded)
+    # H = 70 / 0.1 = 700 pixels
+    # W = 80 / 0.1 = 800 pixels
+    # No padding
+    image_size = (800, 700)  # width × height
     
     # Bounding box padding factor (15% larger to cover turning vehicles)
     padding_factor = 1.15
@@ -271,14 +265,13 @@ def generate_yolo_labels():
     print(f"  Image size: {image_size[0]}×{image_size[1]} (width×height)")
     print(f"  Resolution: {resolution}m per pixel (10cm detail!)")
     print(f"  Coverage: {x_range[1]}m forward, ±{y_range[1]}m left-right")
-    print(f"  Grid size (before padding): 1650×1000 pixels")
-    print(f"  Padding: {(image_size[0]-1650)//2}px horizontal, {(image_size[1]-1000)//2}px vertical")
+    print(f"  Grid size: {image_size[0]}×{image_size[1]} pixels (no padding)")
     print(f"\nFiltering Settings:")
     print(f"  Bounding box padding: {(padding_factor - 1) * 100:.0f}% expansion")
     print(f"  Minimum LiDAR points per box: {min_points_threshold}")
     print(f"  Empty boxes will be: IGNORED ✗")
     print(f"\nTransformations:")
-    print(f"  Horizontal flip: Enabled")
+    print(f"  Horizontal flip: Disabled")
     print(f"  Vertical flip: Enabled")
     print(f"\nClass Mapping (YOLO Format):")
     for i, class_name in enumerate(output_classes):
