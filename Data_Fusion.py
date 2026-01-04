@@ -152,7 +152,7 @@ def get_Lidar_Height_BEV_image(bev_image, bbox, z_range=(-2.5, 1.5)):
     return max_height_m, ground_height_m, object_height_m
 
 # ============================================================================
-# BEV Corner Extraction (FIXED)
+# BEV Corner Extraction (UPDATED - Returns rear corners separately)
 # ============================================================================
 
 def get_Lidar_Corners_BEV_image(bbox, bev_shape, x_range=(0, 70), y_range=(-40, 40)):
@@ -168,6 +168,8 @@ def get_Lidar_Corners_BEV_image(bbox, bev_shape, x_range=(0, 70), y_range=(-40, 
     Returns:
         corners_2d: Array of shape (4, 2) with [x, y] in LiDAR coords (meters)
                     Order: [front-left, front-right, rear-right, rear-left]
+        rear_corners_2d: Array of shape (2, 2) - rear corners only (closest to camera)
+                         Order: [rear-right, rear-left]
     """
     # Handle both 2D and 3D shapes
     if len(bev_shape) == 3:
@@ -209,22 +211,28 @@ def get_Lidar_Corners_BEV_image(bbox, bev_shape, x_range=(0, 70), y_range=(-40, 
     fr_x = x_range[1] - y1 * resolution_x
     fr_y = y_range[0] + x2 * resolution_y
     
-    # Rear-right corner (bottom-right in image)
+    # Rear-right corner (bottom-right in image) - CLOSEST TO CAMERA
     rr_x = x_range[1] - y2 * resolution_x
     rr_y = y_range[0] + x2 * resolution_y
     
-    # Rear-left corner (bottom-left in image)
+    # Rear-left corner (bottom-left in image) - CLOSEST TO CAMERA
     rl_x = x_range[1] - y2 * resolution_x
     rl_y = y_range[0] + x1 * resolution_y
     
     corners_2d = np.array([
-        [fl_x, fl_y],  # Front-left
-        [fr_x, fr_y],  # Front-right
+        [fl_x, fl_y],  # Front-left (index 0)
+        [fr_x, fr_y],  # Front-right (index 1)
+        [rr_x, rr_y],  # Rear-right (index 2)
+        [rl_x, rl_y]   # Rear-left (index 3)
+    ])
+    
+    # Rear corners only (indices 2 and 3)
+    rear_corners_2d = np.array([
         [rr_x, rr_y],  # Rear-right
         [rl_x, rl_y]   # Rear-left
     ])
     
-    return corners_2d
+    return corners_2d, rear_corners_2d
 
 # ============================================================================
 # Coordinate Transformation
@@ -295,23 +303,138 @@ def project_Lidar_Converted_Points_to_Camera_Image(cam_points_3d, P2):
     return image_points, valid_mask
 
 # ============================================================================
-# Detection Matching
+# LiDAR 2D Bounding Box (UPDATED - uses rear corners for 2D box)
 # ============================================================================
 
-def Combine_Camera_and_Lidar_Detections(camera_boxes, lidar_boxes, iou_threshold=0.1):
+def LIDAR_2D_bounding_box(
+    image,
+    lidar_boxes_data,
+    output_path,
+    class_names
+):
     """
-    Match camera and LiDAR detections using 2D IoU
+    Project LiDAR rear corners to camera image and draw 2D bounding boxes
     
     Args:
-        camera_boxes: List of camera detections (YOLO results)
-        lidar_boxes: List of LiDAR detections (YOLO results)
-        iou_threshold: Minimum IoU for matching
+        image: Camera image
+        lidar_boxes_data: List of dicts with LiDAR detection data
+        output_path: Output file path
+        class_names: Dictionary of class names
     
     Returns:
-        matches: List of (camera_idx, lidar_idx) tuples
+        result_img: Image with 2D boxes drawn
+        bbox_2d_list: List of 2D bounding boxes in pixel coordinates
     """
+    result_img = image.copy()
+    bbox_2d_list = []
+    
+    for lidar_data in lidar_boxes_data:
+        # Get the 4 points from rear corners (2 rear corners × 2 heights)
+        rear_corners_img = lidar_data['rear_corners_2d_img']
+        
+        # Get bounding box that encompasses the 4 rear corner points
+        x_min = np.min(rear_corners_img[:, 0])
+        x_max = np.max(rear_corners_img[:, 0])
+        y_min = np.min(rear_corners_img[:, 1])
+        y_max = np.max(rear_corners_img[:, 1])
+        
+        # Convert to integers
+        x1, y1 = int(x_min), int(y_min)
+        x2, y2 = int(x_max), int(y_max)
+        
+        # Clamp to image bounds
+        img_h, img_w = image.shape[:2]
+        x1 = max(0, min(x1, img_w))
+        x2 = max(0, min(x2, img_w))
+        y1 = max(0, min(y1, img_h))
+        y2 = max(0, min(y2, img_h))
+        
+        # Draw 2D bounding box
+        cv2.rectangle(result_img, (x1, y1), (x2, y2), (255, 0, 0), 2)  # Blue color
+        
+        # Add label
+        cls = lidar_data['cls']
+        conf = lidar_data['conf']
+        obj_h = lidar_data['obj_h']
+        label = f"{class_names[cls]} {conf:.2f} H:{obj_h:.2f}m"
+        
+        # Draw label background
+        (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+        cv2.rectangle(result_img, (x1, y1 - label_h - 5), (x1 + label_w, y1), (255, 0, 0), -1)
+        cv2.putText(result_img, label, (x1, y1 - 5),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        # Store bbox
+        bbox_2d_list.append({
+            'bbox': [x1, y1, x2, y2],
+            'cls': cls,
+            'conf': conf,
+            'height': obj_h
+        })
+    
+    # Save image
+    cv2.imwrite(output_path, result_img)
+    
+    return result_img, bbox_2d_list
+
+# ============================================================================
+# Detection Matching (UPDATED - uses rear corners for IoU)
+# ============================================================================
+
+def Combine_Camera_and_Lidar_Detections(
+    camera_boxes, 
+    lidar_boxes_data, 
+    camera_image_shape,
+    iou_threshold=0.5
+):
+    """
+    Match camera and LiDAR detections using 2D IoU with projected rear corners
+    
+    Args:
+        camera_boxes: List of camera detection boxes [x_center, y_center, width, height] in normalized coords
+        lidar_boxes_data: List of dicts with keys:
+            - 'rear_corners_2d_img': (4, 2) array - 2 rear corners at 2 heights
+            - 'corners_2d_img': (8, 2) array - full 8 corners for 3D box
+            - 'bbox': Original BEV bbox
+            - 'cls': Class ID
+            - 'conf': Confidence
+        camera_image_shape: (height, width) of camera image
+        iou_threshold: Minimum IoU for matching (default 0.5 = 50%)
+    
+    Returns:
+        matches: List of (camera_idx, lidar_idx) tuples for matched detections
+    """
+    def get_bbox_from_points(points, img_shape):
+        """Get 2D bounding box that encompasses projected points"""
+        img_h, img_w = img_shape
+        
+        # Get min/max coordinates
+        x_min = np.min(points[:, 0])
+        x_max = np.max(points[:, 0])
+        y_min = np.min(points[:, 1])
+        y_max = np.max(points[:, 1])
+        
+        # Clamp to image bounds
+        x_min = max(0, x_min)
+        x_max = min(img_w, x_max)
+        y_min = max(0, y_min)
+        y_max = min(img_h, y_max)
+        
+        # Convert to center format (normalized)
+        width = x_max - x_min
+        height = y_max - y_min
+        x_center = (x_min + x_max) / 2
+        y_center = (y_min + y_max) / 2
+        
+        return np.array([
+            x_center / img_w,
+            y_center / img_h,
+            width / img_w,
+            height / img_h
+        ])
+    
     def box_iou(box1, box2):
-        """Calculate IoU between two boxes [x_center, y_center, width, height]"""
+        """Calculate IoU between two boxes [x_center, y_center, width, height] in normalized coords"""
         # Convert to [x1, y1, x2, y2]
         b1_x1 = box1[0] - box1[2] / 2
         b1_y1 = box1[1] - box1[3] / 2
@@ -338,6 +461,15 @@ def Combine_Camera_and_Lidar_Detections(camera_boxes, lidar_boxes, iou_threshold
         
         return inter_area / union_area if union_area > 0 else 0
     
+    # Convert LiDAR projected rear corners to 2D bboxes for IoU matching
+    lidar_projected_boxes = []
+    for lidar_data in lidar_boxes_data:
+        # Use rear corners only (4 points: 2 rear corners × 2 heights)
+        rear_corners = lidar_data['rear_corners_2d_img']
+        bbox_2d = get_bbox_from_points(rear_corners, camera_image_shape)
+        lidar_projected_boxes.append(bbox_2d)
+    
+    # Match using IoU
     matches = []
     used_lidar = set()
     
@@ -345,16 +477,13 @@ def Combine_Camera_and_Lidar_Detections(camera_boxes, lidar_boxes, iou_threshold
         best_iou = 0
         best_lidar_idx = -1
         
-        for lidar_idx, lidar_box in enumerate(lidar_boxes):
+        for lidar_idx, lidar_box in enumerate(lidar_projected_boxes):
             if lidar_idx in used_lidar:
                 continue
             
-            # Project LiDAR bbox to camera view for comparison
-            # For simplicity, we'll use spatial proximity heuristic
-            # In practice, you'd project LiDAR bbox corners to camera
-            iou = box_iou(cam_box[:4], lidar_box[:4])
+            iou = box_iou(cam_box, lidar_box)
             
-            if iou > best_iou and iou > iou_threshold:
+            if iou > best_iou and iou >= iou_threshold:
                 best_iou = iou
                 best_lidar_idx = lidar_idx
         
@@ -382,11 +511,11 @@ def draw_3d_box(image, corners_2d, color=(0, 255, 0), thickness=2):
     """
     corners_2d = corners_2d.astype(np.int32)
     
-    # Front face (bottom 4 points)
+    # Bottom face (first 4 points)
     for i in range(4):
         cv2.line(image, tuple(corners_2d[i]), tuple(corners_2d[(i+1)%4]), color, thickness)
     
-    # Rear face (top 4 points)
+    # Top face (last 4 points)
     for i in range(4, 8):
         cv2.line(image, tuple(corners_2d[i]), tuple(corners_2d[4 + (i+1)%4]), color, thickness)
     
@@ -422,7 +551,7 @@ def save_fused_detections(image, corners_3d_list, output_path, labels=None):
     return result_img
 
 # ============================================================================
-# Main Processing
+# Main Processing (UPDATED)
 # ============================================================================
 
 def main():
@@ -441,6 +570,7 @@ def main():
     os.makedirs(output_path, exist_ok=True)
     os.makedirs(f"{output_path}/camera", exist_ok=True)
     os.makedirs(f"{output_path}/lidar", exist_ok=True)
+    os.makedirs(f"{output_path}/lidar_2d", exist_ok=True)
     os.makedirs(f"{output_path}/fused_3d", exist_ok=True)
     
     # Get file lists
@@ -459,6 +589,9 @@ def main():
     print("BEV Format: 1-channel grayscale (height only)")
     print("  Dark = Ground level (-2.5m)")
     print("  Bright = Elevated points (+1.5m)")
+    print("Projection: Using REAR 2 corners (closest to camera)")
+    print("IoU Matching: Based on rear corners at ground & max height")
+    print("3D Box Drawing: Full 4 corners after matching")
     print("="*60)
     
     # Process each sample
@@ -471,6 +604,7 @@ def main():
             # 1. Load data
             # ================================================================
             camera_image = cv2.imread(cam_file)
+            img_h, img_w = camera_image.shape[:2]
             points = load_lidar_data(bin_file)
             P2, R0_rect, Tr_velo_to_cam = load_calibration(calib_file)
             
@@ -479,6 +613,12 @@ def main():
             # ================================================================
             cam_results = camera_model.predict(source=camera_image, save=False, verbose=False)
             cam_detections = cam_results[0].boxes
+            
+            # Extract camera boxes
+            camera_boxes = []
+            for det in cam_detections:
+                bbox = det.xywhn[0].cpu().numpy()  # [x_center, y_center, width, height]
+                camera_boxes.append(bbox)
             
             # Save camera result
             cam_viz = cam_results[0].plot()
@@ -500,10 +640,9 @@ def main():
             cv2.imwrite(f"{output_path}/lidar/{file_id}.png", lidar_viz)
             
             # ================================================================
-            # 4. Process each LiDAR detection
+            # 4. Process LiDAR detections and create 3D boxes
             # ================================================================
-            corners_3d_list = []
-            labels_list = []
+            lidar_boxes_data = []
             
             for det in lidar_detections:
                 # Get bbox in normalized coords
@@ -514,40 +653,106 @@ def main():
                 # Extract height
                 max_h, ground_h, obj_h = get_Lidar_Height_BEV_image(bev_image, bbox)
                 
-                # Get 2D corners in LiDAR coords
-                corners_2d = get_Lidar_Corners_BEV_image(bbox, bev_image.shape)
+                # Get 4 corners AND 2 rear corners in LiDAR coords
+                corners_2d, rear_corners_2d = get_Lidar_Corners_BEV_image(bbox, bev_image.shape)
                 
-                # Create 8 corners (4 ground + 4 top)
+                # ============================================================
+                # Create 8 corners for FULL 3D box (all 4 corners)
+                # ============================================================
                 corners_ground = np.hstack([corners_2d, np.full((4, 1), ground_h)])
                 corners_top = np.hstack([corners_2d, np.full((4, 1), max_h)])
                 corners_3d_lidar = np.vstack([corners_ground, corners_top])
                 
-                # Transform to camera coordinates
+                # Transform full 8 corners to camera coordinates
                 corners_3d_cam = Lidar_Coords_to_Camera_Coords(
                     corners_3d_lidar, R0_rect, Tr_velo_to_cam
                 )
                 
-                # Project to image
-                corners_2d_img, valid = project_Lidar_Converted_Points_to_Camera_Image(
+                # Project full 8 corners to image
+                corners_2d_img, valid_full = project_Lidar_Converted_Points_to_Camera_Image(
                     corners_3d_cam, P2
                 )
                 
-                # Only keep if all corners are valid and in image bounds
-                img_h, img_w = camera_image.shape[:2]
-                in_bounds = np.all(
+                # ============================================================
+                # Create 4 points for IoU MATCHING (rear 2 corners only)
+                # ============================================================
+                rear_ground = np.hstack([rear_corners_2d, np.full((2, 1), ground_h)])
+                rear_top = np.hstack([rear_corners_2d, np.full((2, 1), max_h)])
+                rear_3d_lidar = np.vstack([rear_ground, rear_top])  # 4 points total
+                
+                # Transform rear corners to camera coordinates
+                rear_3d_cam = Lidar_Coords_to_Camera_Coords(
+                    rear_3d_lidar, R0_rect, Tr_velo_to_cam
+                )
+                
+                # Project rear corners to image
+                rear_2d_img, valid_rear = project_Lidar_Converted_Points_to_Camera_Image(
+                    rear_3d_cam, P2
+                )
+                
+                # Check if all points are valid and in image bounds
+                in_bounds_full = np.all(
                     (corners_2d_img[:, 0] >= 0) & 
                     (corners_2d_img[:, 0] < img_w) &
                     (corners_2d_img[:, 1] >= 0) & 
                     (corners_2d_img[:, 1] < img_h)
                 )
                 
-                if np.all(valid) and in_bounds:
-                    corners_3d_list.append(corners_2d_img)
-                    label = f"{class_names[cls]} {conf:.2f} H:{obj_h:.2f}m"
-                    labels_list.append(label)
+                in_bounds_rear = np.all(
+                    (rear_2d_img[:, 0] >= 0) & 
+                    (rear_2d_img[:, 0] < img_w) &
+                    (rear_2d_img[:, 1] >= 0) & 
+                    (rear_2d_img[:, 1] < img_h)
+                )
+                
+                if np.all(valid_full) and np.all(valid_rear) and in_bounds_full and in_bounds_rear:
+                    lidar_boxes_data.append({
+                        'corners_2d_img': corners_2d_img,        # 8 corners for 3D box
+                        'rear_corners_2d_img': rear_2d_img,      # 4 points for IoU
+                        'bbox': bbox,
+                        'cls': cls,
+                        'conf': conf,
+                        'max_h': max_h,
+                        'ground_h': ground_h,
+                        'obj_h': obj_h
+                    })
             
             # ================================================================
-            # 5. Save fused result
+            # 4.5 Save LiDAR 2D bounding boxes (uses rear corners)
+            # ================================================================
+            lidar_2d_img, bbox_2d_list = LIDAR_2D_bounding_box(
+                camera_image,
+                lidar_boxes_data,
+                f"{output_path}/lidar_2d/{file_id}.png",
+                class_names
+            )
+            
+            # ================================================================
+            # 5. Match camera and LiDAR detections (uses rear corners)
+            # ================================================================
+            matches = Combine_Camera_and_Lidar_Detections(
+                camera_boxes,
+                lidar_boxes_data,
+                (img_h, img_w),
+                iou_threshold=0.5
+            )
+            
+            # ================================================================
+            # 6. Create fused 3D boxes (uses full 8 corners)
+            # ================================================================
+            corners_3d_list = []
+            labels_list = []
+            
+            for cam_idx, lidar_idx in matches:
+                lidar_data = lidar_boxes_data[lidar_idx]
+                # Use full 8 corners for 3D box drawing
+                corners_3d_list.append(lidar_data['corners_2d_img'])
+                
+                label = f"{class_names[lidar_data['cls']]} {lidar_data['conf']:.2f} H:{lidar_data['obj_h']:.2f}m"
+                labels_list.append(label)
+            
+            # ================================================================
+            # 7. Save fused result
             # ================================================================
             fused_img = save_fused_detections(
                 camera_image,
@@ -558,7 +763,7 @@ def main():
             
             print(f"  [{idx+1}/{len(camera_files)}] {file_id}: "
                   f"Cam={len(cam_detections)} LiDAR={len(lidar_detections)} "
-                  f"Fused={len(corners_3d_list)}")
+                  f"LiDAR_2D={len(bbox_2d_list)} Matched={len(matches)} Fused={len(corners_3d_list)}")
             
         except Exception as e:
             print(f"  [{idx+1}/{len(camera_files)}] Error processing {file_id}: {str(e)}")
@@ -569,7 +774,8 @@ def main():
     print(f"Completed! Results saved to: {output_path}")
     print(f"  - Camera detections (2D): {output_path}/camera/")
     print(f"  - LiDAR BEV detections (1-channel grayscale): {output_path}/lidar/")
-    print(f"  - Fused 3D boxes: {output_path}/fused_3d/")
+    print(f"  - LiDAR 2D projected boxes (rear corners): {output_path}/lidar_2d/")
+    print(f"  - Fused 3D boxes (full 4 corners): {output_path}/fused_3d/")
 
 
 if __name__ == "__main__":
