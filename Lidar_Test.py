@@ -10,10 +10,10 @@ from Lidar_BEV_Image import load_lidar_data
 
 def lidar_to_bev_array(
     points,
-    x_range=(0, 70),         # forward (m) 
-    y_range=(-40, 40),       # left-right (m)
+    x_range=(0, 50),         # forward (m) 
+    y_range=(-20, 20),       # left-right (m)
     z_range=(-2.5, 1.5),     # height clip (m)
-    resolution=0.1,          
+    resolution=0.08,
     min_x=0.0,               # no minimum x filter
 ):
     x = points[:, 0]
@@ -29,8 +29,8 @@ def lidar_to_bev_array(
     )
     x, y, z = x[mask], y[mask], z[mask]
 
-    H = int(np.ceil((x_range[1] - x_range[0]) / resolution))  # 700 pixels
-    W = int(np.ceil((y_range[1] - y_range[0]) / resolution))  # 800 pixels
+    H = int(np.ceil((x_range[1] - x_range[0]) / resolution))  # 625 pixels
+    W = int(np.ceil((y_range[1] - y_range[0]) / resolution))  # 500 pixels
 
     # Grid indices: row ~ x (forward), col ~ y (left-right)
     ix = ((x - x_range[0]) / resolution).astype(np.int32)
@@ -58,11 +58,11 @@ def lidar_to_bev_array(
 def main():
     # Load the YOLO11 model
     print("Loading YOLO model...")
-    model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-4/train/weights/best.pt")
+    model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-5/train/weights/last.pt")
     
     # Define paths
     velodyne_path = "./Dataset/testing/velodyne/"
-    output_path = "result/Lidar"
+    output_path = "result/Lidar-M5"
     
     # Create output directory
     os.makedirs(output_path, exist_ok=True)
@@ -75,11 +75,6 @@ def main():
         return
     
     print(f"\nProcessing {len(bin_files)} LiDAR files...")
-    print("="*60)
-    print("BEV Format: 1-channel grayscale (height only)")
-    print("  Dark = Ground level (-2.5m)")
-    print("  Bright = Elevated points (+1.5m)")
-    print("="*60)
     
     # Process each file individually
     for idx, bin_file in enumerate(bin_files):
@@ -95,23 +90,14 @@ def main():
             # Verify it's single channel
             assert bev_image.ndim == 2, f"Expected 2D array, got shape {bev_image.shape}"
             
+            print(f"Processing {file_id}...")
+
             # Run inference directly on the 1-channel image
             results = model.predict(
                 source=bev_image,
-                save=False,  # Don't auto-save
+                save=False,
                 verbose=False
             )
-            
-            # Manually save the result with the correct filename
-            result_image = results[0].plot()  # Get annotated image
-            output_file = os.path.join(output_path, f"{file_id}.png")
-            cv2.imwrite(output_file, result_image)
-            
-            # Get detection count
-            num_detections = len(results[0].boxes)
-            
-            print(f"  [{idx+1}/{len(bin_files)}] {file_id}: "
-                  f"{points.shape[0]} points → {num_detections} detections")
             
         except Exception as e:
             print(f"  [{idx+1}/{len(bin_files)}] Error processing {file_id}: {str(e)}")

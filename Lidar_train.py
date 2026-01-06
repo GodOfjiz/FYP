@@ -2,16 +2,16 @@ import ultralytics
 import torch
 from ultralytics import YOLO
 
-model = YOLO("yolo11n.yaml").load("yolo11n.pt")
+model = YOLO("yolo11n-obb.yaml").load("yolo11n-obb.pt")
 
-Version = 'Jetson_yolov11n-kitti-LIDARBEV-only-4'
+Version = 'Jetson_yolov11n-kitti-LIDARBEV-only-5'
 
 custom_transforms = []
 
 if __name__ == '__main__':
     results = model.train(
         data="BEVLidardataset.yaml",
-        epochs=120,
+        epochs=300,
         batch=20,   
         workers=16,          
         amp=True,           
@@ -32,7 +32,7 @@ if __name__ == '__main__':
         augment=True,
         save=True,
         plots=True,
-        patience=100,
+        patience=200,
     )
     
     print("Training completed.")

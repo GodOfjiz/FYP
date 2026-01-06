@@ -33,18 +33,16 @@ def load_calib(calib_file):
 def save_lidar_bev_image(
     output_path,
     points,
-    x_range=(0, 70),         # forward (m)
-    y_range=(-40, 40),       # left-right (m)
+    x_range=(0, 50),         # forward (m)
+    y_range=(-20, 20),       # left-right (m)
     z_range=(-2.5, 1.5),     # height clip (m)
-    resolution=0.1,          
+    resolution=0.08,          
     min_x=0.0,
 ):
     """
     BEV height map for detection:
-      Grayscale/Green = max height (clipped+normalized)
+      Grayscale = max height
       Ground points appear dark, elevated points appear bright
-      
-    Output: 800×700 pixels
     """
 
     x = points[:, 0]

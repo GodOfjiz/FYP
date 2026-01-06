@@ -133,25 +133,27 @@ def check_points_in_box_3d(points_velo, corners_velo, min_points=3):
     num_points = np.sum(mask)
     return num_points >= min_points, num_points
 
-def velodyne_to_bev_coords(points_velo, y_range=(-40, 40), x_range=(0, 70), resolution=0.1, image_size=(800, 700)):
+def velodyne_to_bev_coords(points_velo, y_range=(-20, 20), x_range=(0, 50), resolution=0.08):
     """
     Convert velodyne coordinates to BEV pixel coordinates
     Accounts for vertical flip only (no horizontal flip, no padding)
     
     Args:
-        y_range: left-right range in meters (-40, 40)
-        x_range: forward range in meters (0, 70)
-        resolution: meters per pixel (0.1m = 10cm per pixel)
-        image_size: (width, height) of image (800, 700)
+        points_velo: [N, 3] array of points in velodyne coordinates
+        y_range: left-right range in meters (-20, 20)
+        x_range: forward range in meters (0, 50)
+        resolution: meters per pixel (0.08m = 8cm per pixel)
+    
+    Returns:
+        x_img: column indices (lateral position)
+        y_img: row indices (forward position, after flip)
     """
     x = points_velo[:, 0]  # Forward
     y = points_velo[:, 1]  # Left-right
     
     # Grid size (no padding)
-    H = int(np.ceil((x_range[1] - x_range[0]) / resolution))  # 700 pixels
-    W = int(np.ceil((y_range[1] - y_range[0]) / resolution))  # 800 pixels
-    
-    img_w, img_h = image_size
+    H = int(np.ceil((x_range[1] - x_range[0]) / resolution))  # 625 pixels
+    W = int(np.ceil((y_range[1] - y_range[0]) / resolution))  # 500 pixels
     
     # Convert to grid indices (before any flips)
     ix = ((x - x_range[0]) / resolution).astype(int)
@@ -164,59 +166,46 @@ def velodyne_to_bev_coords(points_velo, y_range=(-40, 40), x_range=(0, 70), reso
     y_img = ix_flipped  # Final row in image
     x_img = iy          # Final column in image
     
-    return x_img, y_img, img_w, img_h
+    return x_img, y_img
 
-def get_bev_bbox(corners_velo, y_range=(-40, 40), x_range=(0, 70), resolution=0.1, image_size=(800, 700), padding_factor=1.15):
+def get_bev_4corners(corners_velo, y_range=(-20, 20), x_range=(0, 50), resolution=0.08, image_size=(500, 625)):
     """
-    Get axis-aligned bounding box in BEV image coordinates
-    Returns normalized YOLO format: x_center, y_center, width, height (all 0-1)
+    Get 4 corners of bounding box in BEV image pixel coordinates
     
     Args:
-        padding_factor: Multiplier to expand bounding box (default 1.15 = 15% larger)
+        corners_velo: [8, 3] 3D box corners in velodyne coordinates
+        y_range: left-right range in meters (-20, 20)
+        x_range: forward range in meters (0, 50)
+        resolution: meters per pixel (0.08m = 8cm per pixel)
+        image_size: (width, height) of image (500, 625)
+    
+    Returns:
+        corners_2d: [4, 2] array of corner pixels [x, y] in image coordinates
+                    Order: [rear-left, rear-right, front-right, front-left]
     """
     # Get BEV coordinates for bottom 4 corners
     bottom_corners = corners_velo[:4]
-    x_img, y_img, img_width, img_height = velodyne_to_bev_coords(
-        bottom_corners, y_range, x_range, resolution, image_size
+    x_img, y_img = velodyne_to_bev_coords(
+        bottom_corners, y_range, x_range, resolution
     )
     
-    # Get min/max to form axis-aligned bounding box
-    x_min = np.min(x_img)
-    x_max = np.max(x_img)
-    y_min = np.min(y_img)
-    y_max = np.max(y_img)
+    # Stack into [4, 2] array
+    corners_2d = np.stack([x_img, y_img], axis=1)
     
-    # Calculate center and dimensions
-    x_center = (x_min + x_max) / 2.0
-    y_center = (y_min + y_max) / 2.0
-    width = x_max - x_min
-    height = y_max - y_min
+    # [0]: front-right, [1]: front-left, [2]: rear-left, [3]: rear-right
+    # [rear-left, rear-right, front-right, front-left]
+    # Reorder: [2, 3, 0, 1]
+    ordered_corners = corners_2d[[2, 3, 0, 1]]
     
-    # Apply padding to width and height (expand around center)
-    width *= padding_factor
-    height *= padding_factor
-    
-    # Normalize to 0-1 (YOLO format)
-    x_center_norm = x_center / img_width
-    y_center_norm = y_center / img_height
-    width_norm = width / img_width
-    height_norm = height / img_height
-    
-    # Clip to valid range
-    x_center_norm = np.clip(x_center_norm, 0, 1)
-    y_center_norm = np.clip(y_center_norm, 0, 1)
-    width_norm = np.clip(width_norm, 0, 1)
-    height_norm = np.clip(height_norm, 0, 1)
-    
-    return x_center_norm, y_center_norm, width_norm, height_norm
+    return ordered_corners
 
 def generate_yolo_labels():
-    """Generate YOLO format labels for BEV images"""
+    """Generate YOLO-OBB format labels for BEV images with 4 corner coordinates"""
     bev_path = "./Dataset/training/lidar_bev_improved/"
     label_path = "./Dataset/training/label_2/"
     calib_path = "./Dataset/training/calib/"
     velodyne_path = "./Dataset/training/velodyne/"  # LiDAR point clouds
-    output_path = "./Dataset/training/lidar_bev_improved_labels/"
+    output_path = "./Dataset/training/lidar_bev_improved_labels_4corners/"
     
     os.makedirs(output_path, exist_ok=True)
     
@@ -240,39 +229,38 @@ def generate_yolo_labels():
     # Classes to include in output
     output_classes = ['Car', 'Van', 'Truck', 'Pedestrian', 'Cyclist', 'Tram']
     
-    # BEV parameters with 0.1m resolution (10cm per pixel) - UPDATED
-    y_range = (-40, 40)      # 80m total left-right
-    x_range = (0, 70)        # 70m forward
-    resolution = 0.1         # 0.1m per pixel (HIGH RESOLUTION)
+    # BEV parameters with 0.08m resolution (8cm per pixel)
+    y_range = (-20, 20)      # 40m total left-right
+    x_range = (0, 50)        # 50m forward
+    resolution = 0.08        # 0.08m per pixel
     
     # Image size calculation:
-    # H = 70 / 0.1 = 700 pixels
-    # W = 80 / 0.1 = 800 pixels
-    # No padding
-    image_size = (800, 700)  # width × height
-    
-    # Bounding box padding factor (15% larger to cover turning vehicles)
-    padding_factor = 1.15
+    # H = 50 / 0.08 = 625 pixels
+    # W = 40 / 0.08 = 500 pixels
+    image_size = (500, 625)  # width × height
     
     # Minimum LiDAR points required inside bounding box
     min_points_threshold = 3  # At least 3 points to keep the box
     
     print("="*70)
-    print("YOLO LABEL GENERATION - BEV LiDAR with Empty Box Filtering")
+    print("YOLO-OBB LABEL GENERATION - BEV LiDAR with 4 Corner Format")
     print("="*70)
     print(f"Found {len(bev_files)} BEV images")
     print(f"\nBEV Configuration:")
     print(f"  Image size: {image_size[0]}×{image_size[1]} (width×height)")
-    print(f"  Resolution: {resolution}m per pixel (10cm detail!)")
+    print(f"  Resolution: {resolution}m per pixel (8cm detail!)")
     print(f"  Coverage: {x_range[1]}m forward, ±{y_range[1]}m left-right")
     print(f"  Grid size: {image_size[0]}×{image_size[1]} pixels (no padding)")
     print(f"\nFiltering Settings:")
-    print(f"  Bounding box padding: {(padding_factor - 1) * 100:.0f}% expansion")
     print(f"  Minimum LiDAR points per box: {min_points_threshold}")
     print(f"  Empty boxes will be: IGNORED ✗")
     print(f"\nTransformations:")
     print(f"  Horizontal flip: Disabled")
     print(f"  Vertical flip: Enabled")
+    print(f"\nOutput Format (YOLO-OBB):")
+    print(f"  <class_id> <x1> <y1> <x2> <y2> <x3> <y3> <x4> <y4>")
+    print(f"  Where (x, y) are NORMALIZED coordinates (0-1) of 4 corners")
+    print(f"  Corner order: rear-left, rear-right, front-right, front-left")
     print(f"\nClass Mapping (YOLO Format):")
     for i, class_name in enumerate(output_classes):
         print(f"  {i}: {class_name}")
@@ -356,16 +344,34 @@ def generate_yolo_labels():
                     empty_boxes_filtered += 1
                     continue  # IGNORE this bounding box
                 
-                # Get YOLO format bounding box with padding
-                x_center, y_center, width, height = get_bev_bbox(
-                    corners_velo, y_range, x_range, resolution, image_size, padding_factor
+                # Get 4 corners in BEV pixel coordinates
+                corners_2d = get_bev_4corners(
+                    corners_velo, y_range, x_range, resolution, image_size
                 )
                 
-                # Check if box is valid (within image bounds and has valid size)
-                if width > 0 and height > 0 and width <= 1 and height <= 1:
+                # Verify corners are within image bounds
+                img_w, img_h = image_size
+                if np.all((corners_2d[:, 0] >= 0) & (corners_2d[:, 0] < img_w) &
+                         (corners_2d[:, 1] >= 0) & (corners_2d[:, 1] < img_h)):
+                    
                     class_id = class_map[obj['type']]
-                    # YOLO format: class_id x_center y_center width height (normalized 0-1)
-                    yolo_labels.append(f"{class_id} {x_center:.6f} {y_center:.6f} {width:.6f} {height:.6f}")
+                    
+                    # Normalize coordinates for YOLO-OBB format (0-1 range)
+                    x1_norm = corners_2d[0, 0] / img_w  # rear-left
+                    y1_norm = corners_2d[0, 1] / img_h
+                    x2_norm = corners_2d[1, 0] / img_w  # rear-right
+                    y2_norm = corners_2d[1, 1] / img_h
+                    x3_norm = corners_2d[2, 0] / img_w  # front-right
+                    y3_norm = corners_2d[2, 1] / img_h
+                    x4_norm = corners_2d[3, 0] / img_w  # front-left
+                    y4_norm = corners_2d[3, 1] / img_h
+                    
+                    # Format: class_id x1 y1 x2 y2 x3 y3 x4 y4 (normalized)
+                    yolo_labels.append(
+                        f"{class_id} {x1_norm:.6f} {y1_norm:.6f} {x2_norm:.6f} {y2_norm:.6f} "
+                        f"{x3_norm:.6f} {y3_norm:.6f} {x4_norm:.6f} {y4_norm:.6f}"
+                    )
+                    
                     obj_count += 1
                     total_objects += 1
                     # Count under the output class name (Person_sitting counted as Pedestrian)
@@ -388,6 +394,8 @@ def generate_yolo_labels():
             
         except Exception as e:
             print(f"  [{idx+1}/{len(bev_files)}] ERROR processing {file_id}: {str(e)}")
+            import traceback
+            traceback.print_exc()
             # Create empty label file on error
             with open(output_file, 'w') as f:
                 pass
@@ -395,12 +403,13 @@ def generate_yolo_labels():
     print("\n" + "="*70)
     print("COMPLETED!")
     print("="*70)
-    print(f"YOLO labels saved to: {output_path}")
+    print(f"YOLO-OBB labels saved to: {output_path}")
     print(f"\nStatistics:")
     print(f"  Total valid objects: {total_objects}")
     print(f"  Empty boxes filtered: {empty_boxes_filtered}")
     print(f"  Files with empty boxes: {files_with_empty_boxes}")
-    print(f"  Filtering rate: {empty_boxes_filtered/(total_objects+empty_boxes_filtered)*100:.1f}%")
+    if (total_objects + empty_boxes_filtered) > 0:
+        print(f"  Filtering rate: {empty_boxes_filtered/(total_objects+empty_boxes_filtered)*100:.1f}%")
     print(f"\nObjects per Class:")
     for class_name in output_classes:
         count = class_counts[class_name]
@@ -421,8 +430,9 @@ def generate_yolo_labels():
         for class_name in output_classes:
             f.write(f"{class_name}\n")
     print(f"\nClass names saved to: {classes_file}")
-    print(f"\nYOLO Format: <class_id> <x_center> <y_center> <width> <height>")
-    print(f"All coordinates normalized to 0-1 range")
+    print(f"\nOutput Format: <class_id> <x1> <y1> <x2> <y2> <x3> <y3> <x4> <y4>")
+    print(f"Corner order: rear-left, rear-right, front-right, front-left")
+    print(f"Coordinates are NORMALIZED (0-1 range) for YOLO-OBB")
     print("="*70)
 
 def main():
