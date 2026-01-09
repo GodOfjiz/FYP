@@ -493,8 +493,8 @@ def save_fused_3D_detections(image, matched_lidar_data, output_path, class_names
 def main():
     # Load models
     print("Loading models...")
-    camera_model = YOLO("./Jetson_yolov11n-kitti-Cam-only-8/train/weights/last.pt")
-    lidar_model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-5/train/weights/last.pt")
+    camera_model = YOLO("./Jetson_yolov11n-kitti-Cam-only-8/train/weights/last.engine")
+    lidar_model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-5/train/weights/last.engine")
     
     # Define paths
     camera_path = "./Dataset/testing/image_2"

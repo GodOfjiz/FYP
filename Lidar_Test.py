@@ -52,17 +52,18 @@ def lidar_to_bev_array(
 
     # Flip vertically (forward points upward)
     bev_u8 = np.flipud(bev_u8)
+    
 
     return bev_u8
 
 def main():
     # Load the YOLO11 model
     print("Loading YOLO model...")
-    model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-5/train/weights/last.pt")
+    model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-5/train/weights/lastfp16.engine")
     
     # Define paths
     velodyne_path = "./Dataset/testing/velodyne/"
-    output_path = "result/Lidar-M5"
+    output_path = "result/Lidar-M5-int8"
     
     # Create output directory
     os.makedirs(output_path, exist_ok=True)
