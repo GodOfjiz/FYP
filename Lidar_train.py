@@ -4,14 +4,14 @@ from ultralytics import YOLO
 
 model = YOLO("yolo11n-obb.yaml").load("yolo11n-obb.pt")
 
-Version = 'Jetson_yolov11n-kitti-LIDARBEV-only-5'
+Version = 'Jetson_yolov11n-kitti-LIDARBEV-only-test'
 
 custom_transforms = []
 
 if __name__ == '__main__':
     results = model.train(
         data="BEVLidardataset.yaml",
-        epochs=300,
+        epochs=20,
         batch=20,   
         workers=16,          
         amp=True,           
