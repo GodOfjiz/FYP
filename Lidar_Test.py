@@ -53,13 +53,16 @@ def lidar_to_bev_array(
     # Flip vertically (forward points upward)
     bev_u8 = np.flipud(bev_u8)
     
-
     return bev_u8
 
 def main():
     # Load the YOLO11 model
     print("Loading YOLO model...")
     model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-5/train/weights/last.engine")
+    
+    # Print model info
+    print(f"Model classes: {model.names}")
+    print(f"Number of classes: {len(model.names)}")
     
     # Define paths
     velodyne_path = "./Dataset/testing/velodyne/"
@@ -88,17 +91,47 @@ def main():
             # Convert to 1-channel grayscale BEV image (H, W)
             bev_image = lidar_to_bev_array(points)
             
-            # Verify it's single channel
-            assert bev_image.ndim == 2, f"Expected 2D array, got shape {bev_image.shape}"
-            
-            print(f"Processing {file_id}...")
+            print(f"Processing {file_id}... (shape: {bev_image.shape})")
 
-            # Run inference directly on the 1-channel image
+            # Run inference
             results = model.predict(
                 source=bev_image,
                 save=False,
-                verbose=False
+                verbose=False,
+                conf=0.25,  # Confidence threshold
+                iou=0.45,   # IoU threshold for NMS
+                max_det=100  # Maximum detections
             )
+            
+            # Save result with proper filename
+            for result in results:
+                # Filter valid detections (only classes that exist in model.names)
+                if result.boxes is not None and len(result.boxes) > 0:
+                    valid_classes = set(model.names.keys())
+                    boxes_data = result.boxes.data.cpu().numpy()
+                    
+                    # Filter out invalid class indices
+                    valid_mask = np.array([int(box[5]) in valid_classes for box in boxes_data])
+                    
+                    if valid_mask.any():
+                        # Keep only valid detections
+                        result.boxes.data = result.boxes.data[valid_mask]
+                    else:
+                        # No valid detections
+                        result.boxes.data = result.boxes.data[0:0]  # Empty tensor
+                
+                # Get the annotated image
+                try:
+                    annotated_img = result.plot()
+                except KeyError as e:
+                    print(f"  Warning: KeyError {e} - saving original image")
+                    annotated_img = bev_image.copy()
+                
+                # Save with original filename
+                output_file = os.path.join(output_path, f"{file_id}.jpg")
+                cv2.imwrite(output_file, annotated_img)
+                
+                print(f"  Saved: {output_file}")
             
         except Exception as e:
             print(f"  [{idx+1}/{len(bin_files)}] Error processing {file_id}: {str(e)}")
