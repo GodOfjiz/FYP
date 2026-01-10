@@ -58,7 +58,7 @@ def lidar_to_bev_array(
 def main():
     # Load the YOLO11 model
     print("Loading YOLO model...")
-    model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-5/train/weights/last.engine")
+    model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-5/train/weights/last.engine", task="obb")
     
     # Print model info
     print(f"Model classes: {model.names}")
@@ -66,7 +66,7 @@ def main():
     
     # Define paths
     velodyne_path = "./Dataset/testing/velodyne/"
-    output_path = "result/Lidar-M5-int8"
+    output_path = "result/Lidar-M5-fp16"
     
     # Create output directory
     os.makedirs(output_path, exist_ok=True)
@@ -98,9 +98,6 @@ def main():
                 source=bev_image,
                 save=False,
                 verbose=False,
-                conf=0.25,  # Confidence threshold
-                iou=0.45,   # IoU threshold for NMS
-                max_det=100  # Maximum detections
             )
             
             # Save result with proper filename
