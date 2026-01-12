@@ -20,8 +20,7 @@ def main():
         name=output_path,
         device=0,
         stream=True,
-        verbose=True,
-        batch=24
+        verbose=True
     )
 
     out_dir = os.path.join("result", output_path)
