@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import time
 from ultralytics import YOLO
 import os
 import glob
@@ -491,6 +492,7 @@ def save_fused_3D_detections(image, matched_lidar_data, output_path, class_names
 # ============================================================================
 
 def main():
+    start_time = time.time()
     # Load models
     print("Loading models...")
     camera_model = YOLO("./Jetson_yolov11n-kitti-Cam-only-8/train/weights/last.engine", task="detect")
@@ -530,6 +532,7 @@ def main():
     
     # Process each sample
     for idx, (cam_file, bin_file) in enumerate(zip(camera_files, bin_files)):
+        sample_start = time.time()
         file_id = os.path.splitext(os.path.basename(cam_file))[0]
         calib_file = os.path.join(calib_path, f"{file_id}.txt")
         
@@ -682,15 +685,22 @@ def main():
             
             print(f"  [{idx+1}/{len(camera_files)}] {file_id}: "
                   f"Cam={num_cam} LiDAR_BEV={num_lidar_bev} "
-                  f"LiDAR_2D={num_lidar_2d} IoU_matched={num_matched}")
+                  f"LiDAR_2D={num_lidar_2d} IoU_matched={num_matched} "
+                  f"time={time.time() - sample_start:.2f}s")
             
         except Exception as e:
             print(f"  [{idx+1}/{len(camera_files)}] Error processing {file_id}: {str(e)}")
             import traceback
             traceback.print_exc()
+            try:
+                print(f"    sample_time={time.time() - sample_start:.2f}s")
+            except:
+                pass
     
+    total_elapsed = time.time() - start_time
     print("\n" + "="*70)
     print(f"Completed! Results saved to: {output_path}")
+    print(f"Total elapsed time: {total_elapsed:.2f} seconds")
     print(f"  - Camera detections (2D): {output_path}/camera/")
     print(f"  - LiDAR BEV OBB detections: {output_path}/lidar/")
     print(f"  - LiDAR 2D projected (min/max X,Y): {output_path}/lidar_2d/")
