@@ -78,8 +78,6 @@ def main():
         print(f"No .bin files found in {velodyne_path}")
         return
     
-    print(f"\nProcessing {len(bin_files)} LiDAR files...")
-    
     # Process each file individually
     for idx, bin_file in enumerate(bin_files):
         file_id = os.path.splitext(os.path.basename(bin_file))[0]
@@ -97,7 +95,8 @@ def main():
             results = model.predict(
                 source=bev_image,
                 save=False,
-                verbose=False,
+                verbose=True,
+                stream=True
             )
             
             # Save result with proper filename
@@ -128,7 +127,6 @@ def main():
                 output_file = os.path.join(output_path, f"{file_id}.jpg")
                 cv2.imwrite(output_file, annotated_img)
                 
-                print(f"  Saved: {output_file}")
             
         except Exception as e:
             print(f"  [{idx+1}/{len(bin_files)}] Error processing {file_id}: {str(e)}")
