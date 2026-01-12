@@ -4,6 +4,7 @@ from ultralytics import YOLO
 import os
 import glob
 from PIL import Image
+import time
 
 # Import functions from Lidar_BEV_Image.py
 from Lidar_BEV_Image import load_lidar_data
@@ -78,6 +79,7 @@ def main():
         print(f"No .bin files found in {velodyne_path}")
         return
     
+    start_time = time.time()
     # Process each file individually
     for idx, bin_file in enumerate(bin_files):
         file_id = os.path.splitext(os.path.basename(bin_file))[0]
@@ -133,6 +135,8 @@ def main():
             import traceback
             traceback.print_exc()
     
+    time_elapsed = time.time() - start_time
+    print(f"\nProcessed {len(bin_files)} files in {time_elapsed:.2f} seconds, average {time_elapsed/len(bin_files):.2f} seconds per file.")
     print("\n" + "="*60)
     print(f"Completed! Results saved to: {output_path}")
 
