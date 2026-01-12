@@ -35,7 +35,7 @@ def load_calibration(calib_file):
     return P2, R0_rect, Tr_velo_to_cam
 
 # ============================================================================
-# BEV Generation (Grayscale - 1 Channel)
+# BEV Generation (Grayscale)
 # ============================================================================
 
 def lidar_to_bev_array(
@@ -351,7 +351,7 @@ def draw_Lidar_2D_BBox(image, lidar_boxes_data, output_path, class_names):
             })
     
     # Save image
-    cv2.imwrite(output_path, result_img)
+    #cv2.imwrite(output_path, result_img)
     
     return result_img, bbox_2d_list
 
@@ -495,14 +495,14 @@ def main():
     start_time = time.time()
     # Load models
     print("Loading models...")
-    camera_model = YOLO("./Jetson_yolov11n-kitti-Cam-only-8/train/weights/last.engine", task="detect")
-    lidar_model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-5/train/weights/last.engine", task="obb")
+    camera_model = YOLO("./Jetson_yolov11n-kitti-Cam-only-8/train/weights/last.pt", task="detect")
+    lidar_model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-5/train/weights/last.pt", task="obb")
     
     # Define paths
     camera_path = "./Dataset/testing/image_2"
     velodyne_path = "./Dataset/testing/velodyne/"
     calib_path = "./Dataset/testing/calib/"
-    output_path = "result/Fusion_3D_OBB"
+    output_path = "result/Fusion_3D"
     
     # Create output directories
     os.makedirs(output_path, exist_ok=True)
@@ -550,42 +550,33 @@ def main():
             # ================================================================
             cam_results = camera_model.predict(source=camera_image, save=False, verbose=False)
             
-            # Extract camera boxes (assuming standard bbox format from camera)
+            # Extract camera boxes
             camera_boxes = []
             cam_detections = cam_results[0].boxes
             if cam_detections is not None and len(cam_detections) > 0:
                 for det in cam_detections:
-                    # Check if OBB or regular bbox
-                    if hasattr(det, 'xyxy'):
-                        # Regular bbox - convert to normalized center format
-                        xyxy = det.xyxy[0].cpu().numpy()
-                        x_center = ((xyxy[0] + xyxy[2]) / 2) / img_w
-                        y_center = ((xyxy[1] + xyxy[3]) / 2) / img_h
-                        width = (xyxy[2] - xyxy[0]) / img_w
-                        height = (xyxy[3] - xyxy[1]) / img_h
-                        camera_boxes.append([x_center, y_center, width, height])
-                    elif hasattr(det, 'xywhn'):
-                        # Normalized center format
-                        bbox = det.xywhn[0].cpu().numpy()
-                        camera_boxes.append(bbox)
+                    # Regular bbox - convert to normalized center format
+                    xyxy = det.xyxy[0].cpu().numpy()
+                    x_center = ((xyxy[0] + xyxy[2]) / 2) / img_w
+                    y_center = ((xyxy[1] + xyxy[3]) / 2) / img_h
+                    width = (xyxy[2] - xyxy[0]) / img_w
+                    height = (xyxy[3] - xyxy[1]) / img_h
+                    camera_boxes.append([x_center, y_center, width, height])
             
-            # Save camera result
-            cam_viz = cam_results[0].plot()
-            cv2.imwrite(f"{output_path}/camera/{file_id}.png", cam_viz)
+            # Save camera result (For Visualization)
+            # cam_viz = cam_results[0].plot()
+            # cv2.imwrite(f"{output_path}/camera/{file_id}.png", cam_viz)
             
             # ================================================================
             # 3. LiDAR inference (1-channel grayscale BEV with OBB)
             # ================================================================
             bev_image, height_map = lidar_to_bev_array(points)
             
-            # Verify it's single channel
-            assert bev_image.ndim == 2, f"Expected 2D array, got shape {bev_image.shape}"
-            
             lidar_results = lidar_model.predict(source=bev_image, save=False, verbose=False)
             
             # Save LiDAR result
-            lidar_viz = lidar_results[0].plot()
-            cv2.imwrite(f"{output_path}/lidar/{file_id}.png", lidar_viz)
+            # lidar_viz = lidar_results[0].plot()
+            # cv2.imwrite(f"{output_path}/lidar/{file_id}.png", lidar_viz)
             
             # ================================================================
             # 4. Process LiDAR OBB detections
@@ -647,7 +638,7 @@ def main():
                 )
             else:
                 lidar_2d_boxes = []
-                cv2.imwrite(f"{output_path}/lidar_2d/{file_id}.png", camera_image)
+                #cv2.imwrite(f"{output_path}/lidar_2d/{file_id}.png", camera_image)
             
             # ================================================================
             # 6. Match detections using IoU
