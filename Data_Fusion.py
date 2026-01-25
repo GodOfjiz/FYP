@@ -493,8 +493,8 @@ def main():
     start_time = time.time()
     # Load models
     print("Loading models...")
-    camera_model = YOLO("./Jetson_yolov11n-kitti-Cam-only-8/train/weights/last.pt", task="detect")
-    lidar_model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-5/train/weights/last.pt", task="obb")
+    camera_model = YOLO("./Jetson_yolov11n-kitti-Cam-only-8/train/weights/last.engine", task="detect")
+    lidar_model = YOLO("./Jetson_yolov11n-kitti-LIDARBEV-only-5/train/weights/last.engine", task="obb")
     
     # Define paths
     camera_path = "./Dataset/testing/image_2"
