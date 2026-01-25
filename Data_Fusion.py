@@ -51,7 +51,6 @@ def lidar_to_bev_array(
     
     Returns:
         bev_u8: Grayscale BEV image (H, W) - single channel
-        height_map: Raw height map (H, W) for extracting actual height values
     """
     x = points[:, 0]
     y = points[:, 1]
@@ -88,9 +87,8 @@ def lidar_to_bev_array(
     
     # Flip vertically (forward points upward)
     bev_u8 = np.flipud(bev_u8)
-    height_map_flipped = np.flipud(height_map)
 
-    return bev_u8, height_map_flipped
+    return bev_u8
 
 # ============================================================================
 # LiDAR Height Extraction from OBB
@@ -570,7 +568,7 @@ def main():
             # ================================================================
             # 3. LiDAR inference (1-channel grayscale BEV with OBB)
             # ================================================================
-            bev_image, height_map = lidar_to_bev_array(points)
+            bev_image = lidar_to_bev_array(points)
             
             lidar_results = lidar_model.predict(source=bev_image, save=False, verbose=False)
             

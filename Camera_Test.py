@@ -6,7 +6,7 @@ import time
 
 def main():
     # Load the YOLO11 model
-    model = YOLO("./Jetson_yolov11n-kitti-Cam-only-8/train/weights/last.engine", task="detect")
+    model = YOLO("./Jetson_yolov11n-kitti-Cam-only-8/train/weights/last.pt", task="detect")
 
     # Define paths
     image_dataset_path = './Dataset/testing/image_2'
@@ -14,7 +14,7 @@ def main():
     
     # Run inference on the image dataset and save results
     results = model.predict(
-        source=image_dataset_path,
+        image_dataset_path * 8,
         save=False,
         project="result",
         name=output_path,
