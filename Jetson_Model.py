@@ -1,7 +1,7 @@
 from ultralytics import YOLO
 
 # Load a YOLO11n PyTorch model
-model = YOLO("./Jetson_yolov11n-kitti-Cam-only-8/train/weights/last.pt")
+model = YOLO("./Jetson_yolov26n-kitti-LIDARBEV-only-1/train/weights/last.pt")
 
 # Export the model to TensorRT
 model.export(format="engine",
